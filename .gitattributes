@@ -1,0 +1,18 @@
+# 统一换行符：仓库内一律存 LF，只在 Windows 检出 .cmd/.bat 时转 CRLF。
+# 原因：demo_shoot_ws 下的 .sh 要在 Ubuntu 22.04 上跑，
+# 若被转成 CRLF，bash 会报 "$'\r': command not found"。
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件，禁止换行符转换与差异比较
+*.deb binary
+*.pdf binary
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pgm binary
+*.mp4 binary
+*.zip binary
