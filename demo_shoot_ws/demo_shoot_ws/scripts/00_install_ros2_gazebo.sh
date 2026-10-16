@@ -232,7 +232,7 @@ install_ros_key() {
   key_tmp="$(mktemp /tmp/ros-archive-key.XXXXXX)"
 
   local urls=(
-    "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key"
+    "https://mirrors.tuna.tsinghua.edu.cn/rosdistro/ros.key"
     "https://gitee.com/ros2-cn/rosdistro/raw/master/ros.key"
   )
 
