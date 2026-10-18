@@ -1,10 +1,9 @@
-# 统一换行符：仓库内一律存 LF，只在 Windows 检出 .cmd/.bat 时转 CRLF。
+# 统一换行符：仓库内一律存 LF，检出也一律 LF。
 # 原因：demo_shoot_ws 下的 .sh 要在 Ubuntu 22.04 上跑，
 # 若被转成 CRLF，bash 会报 "$'\r': command not found"。
+# 注：.cmd/.bat 不设例外 —— cmd.exe 能正常处理 LF，
+#     留例外会让工作区文件与仓库存储不一致，git 会一直显示"已修改"。
 * text=auto eol=lf
-
-*.cmd text eol=crlf
-*.bat text eol=crlf
 
 # 二进制文件，禁止换行符转换与差异比较
 *.deb binary
