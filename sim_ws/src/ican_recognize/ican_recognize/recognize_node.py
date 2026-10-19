@@ -101,9 +101,11 @@ class RecognizeNode(Node):
         self.declare_parameter("vote_min", 4)
         # 发布话术的置信度下限：低于这个值宁可晚一点发，也不发错的
         self.declare_parameter("min_conf_publish", 0.45)
-        # 易混淆类别单独抬高阈值（B-02 缓解措施）：
-        # 「被困人员」与「受损车辆」外观接近，宁可漏报也不误报
-        self.declare_parameter("class_min_conf", "trapped_people:0.60,damaged_vehicle:0.60")
+        # 易混淆类别可单独调整阈值。默认**不做覆盖**（空串）。
+        # 说明：按《判分细则》§1.3，识别失败时该点到达分为 0 且射击也不计分；
+        # 而「发错」与「不发」得分完全相同（都是 0）。因此抬高阈值"宁可不发"
+        # 没有任何计分收益，只会放弃"猜对拿 10 分"的机会 —— 默认保持不覆盖。
+        self.declare_parameter("class_min_conf", "")
         self.declare_parameter("iou_thres", 0.45)
         self.declare_parameter("min_publish_interval", 2.0)
         self.declare_parameter("fps_log_every", 30)
@@ -114,6 +116,10 @@ class RecognizeNode(Node):
         self.declare_parameter("gate_min_dist", 0.60)
         self.declare_parameter("gate_max_dist", 0.90)
         self.declare_parameter("detect_timeout_sec", 5.0)
+        # 超时时强制发布当前最优猜测。
+        # 依据：发错与不发都是 0 分，但发对了能拿 10 分并保住该点射击分，
+        # 所以宁可赌一次也不要空手放弃。
+        self.declare_parameter("force_publish_on_timeout", True)
         self.declare_parameter("status_log_every", 5.0)
 
         self.bridge = CvBridge()
@@ -165,6 +171,7 @@ class RecognizeNode(Node):
         self.gate_min = float(self.get_parameter("gate_min_dist").value)
         self.gate_max = float(self.get_parameter("gate_max_dist").value)
         self.detect_timeout = float(self.get_parameter("detect_timeout_sec").value)
+        self.force_publish = bool(self.get_parameter("force_publish_on_timeout").value)
         self.status_log_every = float(self.get_parameter("status_log_every").value)
 
         self._odom = None
@@ -174,6 +181,8 @@ class RecognizeNode(Node):
         self._timeout_reported = False
         self._last_status_t = 0.0
         self._published_this_approach = False
+        # 本次进窗以来见过的最高置信度检测（不论是否过阈值），用于超时兜底赌一次
+        self._best_seen = (None, 0.0)
 
         if self.gate_enable:
             self.create_subscription(Odometry, odom_topic, self.on_odom, 10)
@@ -290,6 +299,7 @@ class RecognizeNode(Node):
         self._window_enter_t = time.time()
         self._timeout_reported = False
         self._published_this_approach = False
+        self._best_seen = (None, 0.0)
         self._hist.clear()          # 清掉窗口外的旧投票，避免污染
         self._last_pub_class = None
         self.get_logger().info(f"[门控] 进入识别窗口：点位 {pid}，距离 {dist:.2f} m")
@@ -305,6 +315,7 @@ class RecognizeNode(Node):
         self._window_point = None
         self._timeout_reported = False
         self._published_this_approach = False
+        self._best_seen = (None, 0.0)
         self._hist.clear()
         self._last_pub_class = None
 
@@ -397,8 +408,12 @@ class RecognizeNode(Node):
         if not allow_publish:
             if pid is not None:
                 self._publish_status("idle", nearest_point=pid, dist=round(dist, 3))
-        elif cls_name is not None and conf >= self.conf:
-            self._hist.append(cls_name)
+        else:
+            # 记录本次进窗以来的最优单帧结果（不论是否过阈值），供超时兜底使用
+            if cls_name is not None and conf > self._best_seen[1]:
+                self._best_seen = (cls_name, conf)
+            if cls_name is not None and conf >= self.conf:
+                self._hist.append(cls_name)
         # 多帧投票：最近 N 帧里众数且票数够，才认为"识别稳定"
         vote_cls, vote_n = None, 0
         if self._hist:
@@ -435,22 +450,49 @@ class RecognizeNode(Node):
                     dist=None if dist is None else round(dist, 3),
                 )
 
-        # ---- 超时兜底：窗口内持续无法发布 ----
+        # ---- 超时兜底 ----
+        # 依据《判分细则》§1.3：识别失败时该点到达分为 0、射击亦不计分；
+        # 而「发错」与「不发」得分完全相同（都是 0）。因此超时时不必空手放弃，
+        # 应当用当前最优猜测赌一次 —— 发对了能拿 10 分并保住该点射击分。
         if (self.gate_enable and self._in_window
                 and not self._published_this_approach
                 and not self._timeout_reported
                 and (now - self._window_enter_t) > self.detect_timeout):
             self._timeout_reported = True
-            self.get_logger().warn(
-                f"[识别] 点位 {pid} 在 {self.detect_timeout:.1f}s 内未达发布条件"
-                f"（距离 {dist:.2f}m，票数 {vote_n}/{self._vote_min}，"
-                f"置信度 {conf:.2f}/{need_conf:.2f}）"
-                f"→ 判为识别失败，mission 可继续下一点"
-            )
-            self._publish_status(
-                "timeout", point=pid, dist=round(dist, 3),
-                votes=vote_n, conf=round(conf, 3),
-            )
+
+            # 优先用投票结果，其次用本次进窗见过的最高置信度单帧
+            guess_cls, guess_conf, guess_src = None, 0.0, None
+            if vote_cls is not None:
+                guess_cls, guess_conf, guess_src = vote_cls, conf, "vote"
+            elif self._best_seen[0] is not None:
+                guess_cls, guess_conf, guess_src = self._best_seen[0], self._best_seen[1], "best_frame"
+
+            if self.force_publish and guess_cls is not None and CLASS_SCRIPT.get(guess_cls):
+                out = String()
+                out.data = CLASS_SCRIPT[guess_cls]
+                self.det_pub.publish(out)
+                self._last_pub_time = now
+                self._last_pub_class = guess_cls
+                self._published_this_approach = True
+                self.get_logger().warn(
+                    f"[识别] 点位 {pid} 超时 {self.detect_timeout:.1f}s 未达正常发布条件，"
+                    f"按「发错与不发同为 0 分」策略强制发布最优猜测："
+                    f"{guess_cls}（来源={guess_src}, 置信度={guess_conf:.2f}, "
+                    f"票数={vote_n}/{self._vote_min}, 距离={dist:.2f}m）"
+                )
+                self._publish_status(
+                    "forced", cls=guess_cls, conf=round(guess_conf, 3),
+                    src=guess_src, point=pid, dist=round(dist, 3),
+                )
+            else:
+                self.get_logger().warn(
+                    f"[识别] 点位 {pid} 在 {self.detect_timeout:.1f}s 内既未达发布条件、"
+                    f"也没有任何检测结果（距离 {dist:.2f}m）→ 判为识别失败，mission 可继续下一点"
+                )
+                self._publish_status(
+                    "timeout", point=pid, dist=round(dist, 3),
+                    votes=vote_n, conf=round(conf, 3),
+                )
 
         if self.fps_log_every > 0 and self._frame_count % self.fps_log_every == 0:
             # 报「最近 N 帧的实时频率」而不是「启动至今的累计平均」：
