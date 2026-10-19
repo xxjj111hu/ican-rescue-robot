@@ -26,7 +26,13 @@
     debug_image_topic: /ican_recognize/debug_image
     publish_result: true
     publish_status: true
-    publish_debug_image: true
+
+    # ---- 调试图（默认关闭！）----
+    # 实测：开启调试图后每帧多花约 127 ms，整体频率从 25 Hz 掉到 7 Hz。
+    # 原因：每帧复制 800x800x3（1.9MB）图像 + cv2 画框 + tobytes + rclpy 序列化发布。
+    # 平时保持 false；需要肉眼检查时置 true，并用 debug_every 降频（每 N 帧发一次）。
+    publish_debug_image: false
+    debug_every: 10
 
     # ---- 多帧投票 ----
     vote_window: 7

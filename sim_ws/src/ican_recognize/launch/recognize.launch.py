@@ -34,8 +34,10 @@ def generate_launch_description():
                               description="识别窗口远端（m）"),
         DeclareLaunchArgument("detect_timeout_sec", default_value="5.0",
                               description="窗口内无发布多久判为识别失败"),
-        DeclareLaunchArgument("publish_debug_image", default_value="true",
-                              description="是否发布调试图"),
+        DeclareLaunchArgument("publish_debug_image", default_value="false",
+                              description="是否发布调试图（开启会显著拖慢主循环，实测 25Hz→7Hz）"),
+        DeclareLaunchArgument("debug_every", default_value="10",
+                              description="调试图每 N 帧发一次"),
     ]
 
     # 只覆盖这几个；model_path 等仍以参数文件为准，避免空串覆盖
@@ -46,6 +48,7 @@ def generate_launch_description():
         "gate_max_dist": LaunchConfiguration("gate_max_dist"),
         "detect_timeout_sec": LaunchConfiguration("detect_timeout_sec"),
         "publish_debug_image": LaunchConfiguration("publish_debug_image"),
+        "debug_every": LaunchConfiguration("debug_every"),
     }
 
     node = Node(

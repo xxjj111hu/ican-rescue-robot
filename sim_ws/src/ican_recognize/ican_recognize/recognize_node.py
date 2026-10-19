@@ -78,7 +78,11 @@ class RecognizeNode(Node):
         self.declare_parameter("publish_result", True)
         self.declare_parameter("publish_status", True)
         self.declare_parameter("debug_image_topic", "/ican_recognize/debug_image")
-        self.declare_parameter("publish_debug_image", True)
+        # 默认关闭：实测开启时每帧要多花约 127 ms（复制 1.9MB 图像 + 画框 +
+        # tobytes + rclpy 序列化发布），把整体频率从 25 Hz 拖到 7 Hz。
+        # 需要肉眼检查时用 debug_every 控制降频发布。
+        self.declare_parameter("publish_debug_image", False)
+        self.declare_parameter("debug_every", 10)
 
         # 模型路径：默认放 ~/.ros/ican_recognize/，可用环境变量或参数覆盖
         self.declare_parameter("model_dir", DEFAULT_MODEL_DIR)
@@ -144,6 +148,7 @@ class RecognizeNode(Node):
         status_topic = str(self.get_parameter("status_topic").value)
         debug_topic = str(self.get_parameter("debug_image_topic").value)
         self.publish_debug = bool(self.get_parameter("publish_debug_image").value)
+        self._debug_every = max(1, int(self.get_parameter("debug_every").value))
 
         det_qos = QoSProfile(depth=10)
         det_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -190,7 +195,8 @@ class RecognizeNode(Node):
         self.get_logger().info(
             f"识别节点就绪（{self.mode}）: {image_topic} -> {det_topic} "
             f"| 门控={self.gate_enable} 窗口=[{self.gate_min:.2f},{self.gate_max:.2f}]m "
-            f"| 易混淆类阈值={self._class_min_conf or '无'}"
+            f"| 易混淆类阈值={self._class_min_conf or '无'} "
+            f"| 调试图={'每 %d 帧' % self._debug_every if self.publish_debug else '关闭'}"
         )
 
     # ---------- 模型加载 ----------
@@ -458,18 +464,20 @@ class RecognizeNode(Node):
                 )
 
         if self.debug_pub is not None and box is not None:
-            try:
-                debug = image.copy()
-                x1, y1, x2, y2 = [int(v) for v in box]
-                cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label = f"{cls_name} {conf:.2f}"
-                if dist is not None:
-                    label += f" d={dist:.2f}m"
-                cv2.putText(debug, label, (x1, max(0, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                self.debug_pub.publish(self._cv2_to_imgmsg(debug, msg.header))
-            except Exception as exc:
-                self.get_logger().warn(f"[debug] 发布失败: {exc}")
+            # 降频发布：调试图只供人眼检查，按 debug_every 抽帧，避免拖慢主循环
+            if self._debug_every <= 1 or self._frame_count % self._debug_every == 0:
+                try:
+                    debug = image.copy()
+                    x1, y1, x2, y2 = [int(v) for v in box]
+                    cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"{cls_name} {conf:.2f}"
+                    if dist is not None:
+                        label += f" d={dist:.2f}m"
+                    cv2.putText(debug, label, (x1, max(0, y1 - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    self.debug_pub.publish(self._cv2_to_imgmsg(debug, msg.header))
+                except Exception as exc:
+                    self.get_logger().warn(f"[debug] 发布失败: {exc}")
 
     @staticmethod
     def _cv2_to_imgmsg(cv_img, header):
