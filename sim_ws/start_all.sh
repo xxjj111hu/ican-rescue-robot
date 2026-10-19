@@ -11,7 +11,10 @@
 #
 # 查看日志：
 #   tail -f logs/sim.log logs/nav.log logs/recog.log logs/mission.log
-set -u
+#
+# 注意：本脚本**不能**使用 set -u（nounset）。
+# ROS 2 的 setup.bash 会引用 $AMENT_TRACE_SETUP_FILES 等可能未定义的变量，
+# 开启 nounset 后会直接报 "unbound variable" 并退出。
 
 WS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$WS/logs"

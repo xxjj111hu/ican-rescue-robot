@@ -13,7 +13,9 @@
 #     sim_ws/
 #       run_headless_nav.sh     ← 本脚本
 #       install/setup.bash
-set -u
+#
+# 注意：不能用 set -u —— ROS 2 的 setup.bash 引用了 $AMENT_TRACE_SETUP_FILES
+# 等可能未定义的变量，开 nounset 会报 "unbound variable" 直接退出。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="$SCRIPT_DIR"
