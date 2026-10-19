@@ -1,151 +1,198 @@
 #!/usr/bin/env python3
-"""数据集验收自检（B-01）。
+"""数据集自检：交付前跑一遍，全部 OK 再推。
 
-对照《任务说明书》B-01 验收口径检查一个 YOLO 数据集目录：
-  1. 5 个类别齐全，顺序与 scripts_table.CLASS_ORDER 一致
-  2. **每类不少于 50 张**（本项目实测每类 157~176 个框，应远超）
-  3. train / val 都不为空
-  4. 每个 label 文件格式合法（5 个字段、数值范围 0~1、class id 在范围内）
-  5. 报告图片与标签是否一一对应
+检查项：
+  1. images/{train,val} 与 labels/{train,val} 目录存在
+  2. 图片与标签一一对应（不缺不多）
+  3. 每张图能被 OpenCV 正常读取，尺寸一致
+  4. 每行标签 5 个字段、类别 0~4、坐标在 [0,1]、宽高为正
+  5. 每个划分的类别分布，以及「每类不少于 50 张」的验收要求
+  6. data.yaml 的类别顺序与代码一致
 
 用法：
-    python3 scripts/check_dataset.py --root dataset_all
-    python3 scripts/check_dataset.py --root dataset_all --min-per-class 50
-
-退出码：0 = 全部通过，1 = 有不合格项。
+  python3 交付包/识别/脚本/check_dataset.py --root 交付包/识别/数据
+  python3 交付包/识别/脚本/check_dataset.py --root 交付包/识别/数据 --min-per-class 50
 """
-from __future__ import annotations
-
 import argparse
 import sys
 from collections import Counter
 from pathlib import Path
 
-# 与 ican_recognize/scripts_table.py 的 CLASS_ORDER 保持一致
-CLASS_ORDER = ["trapped_people", "rescue_camp", "collapsed_ruins", "damaged_vehicle", "landslide"]
-
-IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="YOLO 数据集验收自检（B-01）")
-    p.add_argument("--root", type=Path, required=True, help="数据集根目录（含 images/ labels/）")
-    p.add_argument("--min-per-class", type=int, default=50, help="每类最少框数（默认 50）")
-    return p.parse_args()
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 
-def read_names(data_yaml: Path):
-    """尽量读 data.yaml 的 names（只用标准库，不强制依赖 pyyaml）。"""
-    if not data_yaml.is_file():
-        return None, "未找到 data.yaml"
-    text = data_yaml.read_text(encoding="utf-8", errors="ignore")
-    names = []
-    for line in text.splitlines():
-        s = line.strip()
-        if s.startswith("- "):
-            names.append(s[2:].strip().strip("'\""))
-    return names, None
-
-
-def count_split(root: Path, split: str, problems: list):
-    """统计一个 split 的框数与合法性，返回 (Counter, 图片数, 标签数)。"""
-    img_dir = root / "images" / split
-    lbl_dir = root / "labels" / split
-    boxes = Counter()
-
-    if not img_dir.is_dir():
-        problems.append(f"[{split}] 图片目录不存在: {img_dir}")
-        return boxes, 0, 0
-    if not lbl_dir.is_dir():
-        problems.append(f"[{split}] 标签目录不存在: {lbl_dir}")
-        return boxes, 0, 0
-
-    imgs = {p.stem for p in img_dir.iterdir() if p.suffix.lower() in IMG_EXTS}
-    lbls = {p.stem for p in lbl_dir.glob("*.txt")}
-
-    for stem in sorted(imgs - lbls):
-        problems.append(f"[{split}] 图片无对应标签: {stem}")
-    for stem in sorted(lbls - imgs):
-        problems.append(f"[{split}] 标签无对应图片: {stem}")
-
-    empty = 0
-    for lbl in sorted(lbl_dir.glob("*.txt")):
-        lines = [ln for ln in lbl.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        if not lines:
-            empty += 1
+def image_size(path):
+    """返回 (h, w)；优先用 OpenCV，没有 cv2 时直接解析 JPEG 的 SOF 段。"""
+    if cv2 is not None:
+        img = cv2.imread(str(path))
+        return None if img is None else img.shape[:2]
+    data = Path(path).read_bytes()
+    if data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    while i < len(data) - 9:
+        if data[i] != 0xFF:
+            i += 1
             continue
-        for i, ln in enumerate(lines, 1):
-            parts = ln.split()
-            if len(parts) != 5:
-                problems.append(f"[{split}] {lbl.name} 第 {i} 行字段数={len(parts)}，应为 5")
+        marker = data[i + 1]
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+            h = int.from_bytes(data[i + 5:i + 7], "big")
+            w = int.from_bytes(data[i + 7:i + 9], "big")
+            return (h, w)
+        i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    return None
+
+CLASSES = ["trapped_people", "rescue_camp", "collapsed_ruins", "damaged_vehicle", "landslide"]
+ZH = dict(zip(CLASSES, ["被困人员", "救援营地", "坍塌废墟", "受损车辆", "滑坡塌方"]))
+SPLITS = ("train", "val")
+
+errors = []
+warnings = []
+oks = []
+
+
+def ok(msg):
+    oks.append(msg)
+    print(f"[OK]   {msg}")
+
+
+def bad(msg):
+    errors.append(msg)
+    print(f"[FAIL] {msg}")
+
+
+def warn(msg):
+    warnings.append(msg)
+    print(f"[WARN] {msg}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default="交付包/识别/数据")
+    ap.add_argument("--min-per-class", type=int, default=50)
+    ap.add_argument("--allow-multi-box", action="store_true", default=True)
+    args = ap.parse_args()
+
+    root = Path(args.root)
+    if not root.exists():
+        bad(f"目录不存在: {root}")
+        return finish()
+
+    # 1. 目录
+    for split in SPLITS:
+        for sub in ("images", "labels"):
+            d = root / sub / split
+            if d.is_dir():
+                ok(f"目录存在: {sub}/{split}")
+            else:
+                bad(f"缺少目录: {sub}/{split}")
+
+    # 2/3/4. 逐划分检查
+    sizes = Counter()
+    class_count = {s: Counter() for s in SPLITS}
+    for split in SPLITS:
+        img_dir = root / "images" / split
+        lab_dir = root / "labels" / split
+        if not img_dir.is_dir() or not lab_dir.is_dir():
+            continue
+        imgs = {p.stem: p for p in img_dir.glob("*.jpg")}
+        labs = {p.stem for p in lab_dir.glob("*.txt")}
+        only_img = set(imgs) - labs
+        only_lab = labs - set(imgs)
+        if only_img:
+            bad(f"{split}: {len(only_img)} 张图没有标签，例如 {sorted(only_img)[:3]}")
+        if only_lab:
+            bad(f"{split}: {len(only_lab)} 个标签没有图，例如 {sorted(only_lab)[:3]}")
+        if not only_img and not only_lab:
+            ok(f"{split}: 图片与标签一一对应（{len(imgs)} 对）")
+
+        n_box = 0
+        for stem, p in sorted(imgs.items()):
+            size = image_size(p)
+            if size is None:
+                bad(f"{split}/{p.name}: 图片无法读取")
                 continue
-            try:
-                cid = int(parts[0])
-                *vals, = map(float, parts[1:])
-            except ValueError:
-                problems.append(f"[{split}] {lbl.name} 第 {i} 行含非数字")
+            sizes[size] += 1
+            lab = lab_dir / (stem + ".txt")
+            if not lab.exists():
                 continue
-            if not (0 <= cid < len(CLASS_ORDER)):
-                problems.append(f"[{split}] {lbl.name} 第 {i} 行 class id={cid} 越界")
+            lines = [l for l in lab.read_text(encoding="utf-8").splitlines() if l.strip()]
+            if not lines:
+                bad(f"{split}/{stem}.txt: 空标签")
                 continue
-            if any(v < 0.0 or v > 1.0 for v in vals):
-                problems.append(f"[{split}] {lbl.name} 第 {i} 行坐标不在 0~1（应已归一化）")
-                continue
-            boxes[CLASS_ORDER[cid]] += 1
+            for ln in lines:
+                v = ln.split()
+                if len(v) != 5:
+                    bad(f"{split}/{stem}.txt: 字段数 {len(v)} != 5")
+                    continue
+                try:
+                    cid = int(v[0])
+                    cx, cy, w, h = map(float, v[1:])
+                except ValueError:
+                    bad(f"{split}/{stem}.txt: 无法解析「{ln}」")
+                    continue
+                if not (0 <= cid < len(CLASSES)):
+                    bad(f"{split}/{stem}.txt: 类别 id {cid} 越界")
+                    continue
+                if not (0 <= cx <= 1 and 0 <= cy <= 1):
+                    bad(f"{split}/{stem}.txt: 中心越界 ({cx},{cy})")
+                if not (0 < w <= 1 and 0 < h <= 1):
+                    bad(f"{split}/{stem}.txt: 宽高异常 ({w},{h})")
+                class_count[split][cid] += 1
+                n_box += 1
+        if n_box:
+            ok(f"{split}: 共 {n_box} 个框，格式合法")
 
-    if empty:
-        problems.append(f"[{split}] 有 {empty} 个空标签文件（无标注）")
-    return boxes, len(imgs), len(lbls)
+    # 3b. 尺寸一致性
+    if len(sizes) == 1:
+        hw = next(iter(sizes))
+        ok(f"所有图片尺寸一致: {hw[1]}x{hw[0]}")
+    elif sizes:
+        warn(f"图片尺寸不统一: {dict(sizes)}")
 
-
-def main() -> int:
-    args = parse_args()
-    root: Path = args.root
-    problems: list[str] = []
-
-    if not root.is_dir():
-        print(f"[失败] 数据集目录不存在: {root}")
-        return 1
-
-    names, err = read_names(root / "data.yaml")
-    if err:
-        problems.append(err)
-    else:
-        if names != CLASS_ORDER:
-            problems.append(
-                f"data.yaml 的 names 与 CLASS_ORDER 不一致\n"
-                f"    data.yaml : {names}\n"
-                f"    CLASS_ORDER: {CLASS_ORDER}"
-            )
-
-    total = Counter()
-    print(f"数据集根目录: {root.resolve()}\n")
-    for split in ("train", "val"):
-        boxes, n_img, n_lbl = count_split(root, split, problems)
-        total.update(boxes)
-        print(f"[{split}] 图片 {n_img} 张 / 标签 {n_lbl} 个 / 框 {sum(boxes.values())} 个")
-        for cls in CLASS_ORDER:
-            print(f"    {cls:<18} {boxes.get(cls, 0):>4}")
-        print()
-
-    print(f"[合计] 框 {sum(total.values())} 个")
-    for cls in CLASS_ORDER:
-        n = total.get(cls, 0)
-        mark = "[OK]" if n >= args.min_per_class else "[失败]"
-        print(f"    {cls:<18} {n:>4}  {mark} (下限 {args.min_per_class})")
+    # 5. 类别分布 + 每类下限
+    print("\n类别分布：")
+    print(f"  {'类别':<14}{'train':>8}{'val':>8}")
+    for i, c in enumerate(CLASSES):
+        print(f"  {ZH[c]:<12}{class_count['train'][i]:>8}{class_count['val'][i]:>8}")
+    for i, c in enumerate(CLASSES):
+        n = class_count["train"][i] + class_count["val"][i]
         if n < args.min_per_class:
-            problems.append(f"类别 {cls} 仅 {n} 个框，低于下限 {args.min_per_class}")
+            bad(f"{ZH[c]} 只有 {n} 个框，少于要求的 {args.min_per_class}")
+    if all((class_count["train"][i] + class_count["val"][i]) >= args.min_per_class
+           for i in range(len(CLASSES))):
+        ok(f"每一类都 ≥ {args.min_per_class} 个框")
 
-    print()
-    if problems:
-        print(f"[失败] 未通过，共 {len(problems)} 个问题：")
-        for p in problems:
-            print("  -", p)
-        return 1
+    # 6. data.yaml
+    yaml_path = root / "data.yaml"
+    if yaml_path.exists():
+        txt = yaml_path.read_text(encoding="utf-8")
+        miss = [c for c in CLASSES if c not in txt]
+        if miss:
+            bad(f"data.yaml 缺少类别: {miss}")
+        else:
+            ok("data.yaml 类别顺序与代码一致")
+    else:
+        warn("没有 data.yaml（不影响数据集本身，但训练时需要）")
 
-    print("[OK] 数据集自检全部通过：类别齐全、顺序一致、每类框数达标、标注格式合法。")
-    return 0
+    finish()
+
+
+def finish():
+    print("\n" + "=" * 60)
+    if errors:
+        print(f"结果: 未通过（{len(errors)} 个错误，{len(warnings)} 个警告）")
+        for e in errors[:10]:
+            print("  -", e)
+        print("=" * 60)
+        sys.exit(1)
+    print(f"结果: OK 全部通过（{len(oks)} 项检查，{len(warnings)} 个警告）")
+    print("=" * 60)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

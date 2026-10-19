@@ -1,0 +1,10 @@
+path: /home/longying01/demo_shoot_ws/dataset_all
+train: images/train
+val: images/val
+nc: 5
+names:
+  0: trapped_people
+  1: rescue_camp
+  2: collapsed_ruins
+  3: damaged_vehicle
+  4: landslide

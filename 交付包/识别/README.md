@@ -24,11 +24,17 @@
   话术逐字对照表.md          ← 我方实现 vs 细则表 5（已修正 PDF 交错文本导致的误判）
   鲁棒性测试报告.md          ← 6 轮实测数据与结论
   兜底策略说明.md            ← 多层兜底机制与未做部分
+  数据/
+    images/train  images/val   ← 612 张 800x800 JPG
+    labels/train  labels/val   ← 612 个 YOLO txt
+    data.yaml                  ← 训练配置
+    README.md
   模型/
     best.pt                 ← ican_v6，YOLO11n，640 输入
     混淆矩阵.png / 混淆矩阵_归一化.png
     训练曲线.png / results.csv / 验证集预测示例.jpg
   脚本/
+    check_dataset.py        ← 数据集自检（交付前必须先跑，全 OK 再推）
     infer.py                ← 独立推理（不依赖 ROS）
     acceptance_run.py       ← 验收口径自动测试（5 点位 ×10 次）
     auto_collect.py         ← 自动采集（换贴图 seed → 开车 → 抓帧）
@@ -38,6 +44,13 @@
   报告/
     acc_*.txt               ← 6 轮验收原始输出
     eval_*.txt              ← 单帧/距离扫描原始输出
+
+## 交付前必做
+
+```bash
+python3 交付包/识别/脚本/check_dataset.py --root 交付包/识别/数据
+# 看到「结果: OK 全部通过」再提交
+```
 ```
 
 ## 三、如何使用
