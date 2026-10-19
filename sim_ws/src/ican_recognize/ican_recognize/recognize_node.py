@@ -185,6 +185,8 @@ class RecognizeNode(Node):
         self._last_pub_class = None
         self._frame_count = 0
         self._t0 = time.time()
+        # 用于计算「实时 FPS」的滑动时间窗（不含窗口外的空闲期）
+        self._frame_times = deque(maxlen=max(2, self.fps_log_every))
         self.get_logger().info(
             f"识别节点就绪（{self.mode}）: {image_topic} -> {det_topic} "
             f"| 门控={self.gate_enable} 窗口=[{self.gate_min:.2f},{self.gate_max:.2f}]m "
@@ -341,20 +343,22 @@ class RecognizeNode(Node):
             self.get_logger().warn(f"[图像] 转换失败: {exc}")
             return
 
-        # ---- 距离门控 ----
+        # ---- 距离门控状态 ----
+        # 只影响【投票 + 话术发布】，不影响推理与 /detection/result。
+        # 后者是验证「>=10 Hz」的观测通道，必须始终有数据。
         pid, dist = self._nearest_point()
-        if self.gate_enable:
-            if pid is None:
-                self._publish_status("waiting_odom")
-                return
+        if not self.gate_enable:
+            in_window = True
+        elif pid is None:
+            in_window = False
+            self._publish_status("waiting_odom")
+        else:
             in_window = self.gate_min <= dist <= self.gate_max
             if in_window and not self._in_window:
                 self._entered_window(pid, dist)
             elif not in_window and self._in_window:
                 self._left_window()
-            if not in_window:
-                self._publish_status("idle", nearest_point=pid, dist=round(dist, 3))
-                return
+        allow_publish = in_window
 
         t_start = time.time()
         try:
@@ -365,6 +369,7 @@ class RecognizeNode(Node):
 
         self._frame_count += 1
         now = time.time()
+        self._frame_times.append(now)
 
         if self.publish_result:
             res = String()
@@ -382,7 +387,11 @@ class RecognizeNode(Node):
             )
             self.result_pub.publish(res)
 
-        if cls_name is not None and conf >= self.conf:
+        # 窗口外不投票：只在识别窗口内积累票数
+        if not allow_publish:
+            if pid is not None:
+                self._publish_status("idle", nearest_point=pid, dist=round(dist, 3))
+        elif cls_name is not None and conf >= self.conf:
             self._hist.append(cls_name)
         # 多帧投票：最近 N 帧里众数且票数够，才认为"识别稳定"
         vote_cls, vote_n = None, 0
@@ -395,7 +404,7 @@ class RecognizeNode(Node):
             self._class_min_conf.get(vote_cls, 0.0) if vote_cls else self._min_conf_pub,
         )
 
-        if (vote_cls is not None and vote_n >= self._vote_min
+        if (allow_publish and vote_cls is not None and vote_n >= self._vote_min
                 and conf >= need_conf):
             script = CLASS_SCRIPT.get(vote_cls)
             changed = vote_cls != self._last_pub_class
@@ -438,10 +447,15 @@ class RecognizeNode(Node):
             )
 
         if self.fps_log_every > 0 and self._frame_count % self.fps_log_every == 0:
-            dt = max(time.time() - self._t0, 1e-6)
-            self.get_logger().info(
-                f"[FPS] 已处理 {self._frame_count} 帧，平均 {self._frame_count / dt:.1f} Hz"
-            )
+            # 报「最近 N 帧的实时频率」而不是「启动至今的累计平均」：
+            # 累计平均会被窗口外的空闲期、仿真暂停等拉低，严重低估真实处理速度。
+            if len(self._frame_times) >= 2:
+                span = self._frame_times[-1] - self._frame_times[0]
+                inst = (len(self._frame_times) - 1) / span if span > 1e-6 else 0.0
+                self.get_logger().info(
+                    f"[FPS] 已处理 {self._frame_count} 帧，"
+                    f"最近 {len(self._frame_times)} 帧实时 {inst:.1f} Hz"
+                )
 
         if self.debug_pub is not None and box is not None:
             try:
