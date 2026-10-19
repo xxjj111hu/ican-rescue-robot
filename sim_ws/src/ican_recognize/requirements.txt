@@ -1,0 +1,14 @@
+# ican_recognize 的 pip 依赖
+#
+# 安装：
+#   pip3 install -r requirements.txt
+#
+# ⚠️ 关键约束：numpy 必须锁在 1.x
+#    ROS 2 Humble 的 cv_bridge 是按 numpy 1.x 的 ABI 编译的，
+#    装成 numpy 2.x 会让 cv_bridge 在 import 或 imgmsg_to_cv2 时崩溃，
+#    而且报错信息不直观（AttributeError / _ARRAY_API not found），很难排查。
+#
+# ⚠️ ultralytics 会连带安装 torch + torchvision（CPU 版约 300~500 MB）。
+
+numpy<2
+ultralytics

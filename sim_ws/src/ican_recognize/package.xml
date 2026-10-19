@@ -12,6 +12,16 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <!-- 距离门控订阅 /odom，需要 nav_msgs -->
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+
+  <!--
+    以下为 pip 依赖，不是 rosdep key，需手动安装（见 requirements.txt）：
+      pip3 install "numpy<2" ultralytics
+    注意必须锁 numpy<2，否则会破坏 cv_bridge（按 numpy 1.x ABI 编译）。
+  -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

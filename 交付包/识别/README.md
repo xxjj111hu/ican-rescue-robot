@@ -42,7 +42,22 @@
 
 ## 三、如何使用
 
-### 0. 准备模型（只需一次）
+### 0. 安装依赖（只需一次）
+
+```bash
+# ROS 侧：nav_msgs / cv_bridge / python3-opencv / python3-numpy（一般已随 ROS 装好）
+# pip 侧：
+pip3 install -r sim_ws/src/ican_recognize/requirements.txt
+# 等价于：pip3 install "numpy<2" ultralytics
+```
+
+> ⚠️ **必须锁 `numpy<2`**：ROS 2 Humble 的 `cv_bridge` 按 numpy 1.x ABI 编译，
+> 升到 2.x 会让它在 `imgmsg_to_cv2` 时崩溃，且报错不直观。
+> ⚠️ `ultralytics` 会连带装 torch + torchvision（CPU 版约 300~500 MB）。
+>
+> 验证：`python3 -c "import cv_bridge, ultralytics, numpy; print('OK', numpy.__version__)"`
+
+### 1. 准备模型（只需一次）
 
 ```bash
 mkdir -p ~/.ros/ican_recognize
@@ -52,7 +67,7 @@ cp 交付包/识别/模型/best.pt ~/.ros/ican_recognize/best.pt
 > 节点默认读 `~/.ros/ican_recognize/best.pt`，不再是写死的个人路径。
 > 也可用 `ICAN_YOLO_MODEL` 环境变量或 `model_path` 参数覆盖。
 
-### 1. 只看模型效果（不需要 ROS）
+### 2. 只看模型效果（不需要 ROS）
 
 ```bash
 cd 交付包/识别/脚本
@@ -60,7 +75,7 @@ python3 infer.py --source 某张图.jpg --save 输出/
 python3 infer.py --source 某目录/
 ```
 
-### 2. 在仿真里跑识别节点
+### 3. 在仿真里跑识别节点
 
 节点现在就在工作空间里，直接编译：
 
@@ -82,7 +97,7 @@ ros2 launch ican_recognize recognize.launch.py
 | `/ican_recognize/status` | **【新增】** 门控状态 JSON：`idle / in_window / published / timeout`，供 mission 判断 |
 | `/ican_recognize/debug_image` | 画框图（带距离标注） |
 
-### 3. 数据集自检（B-01 验收）
+### 4. 数据集自检（B-01 验收）
 
 ```bash
 python3 交付包/识别/脚本/check_dataset.py --root dataset_all
@@ -91,7 +106,7 @@ python3 交付包/识别/脚本/check_dataset.py --root dataset_all
 检查项：5 类齐全、`data.yaml` 的 names 与 `CLASS_ORDER` 一致、每类 ≥50 框、
 标签格式合法（5 字段、归一化 0~1、class id 在范围内）、图片与标签一一对应。
 
-### 4. 跑验收口径测试
+### 5. 跑验收口径测试
 
 ```bash
 ros2 launch ican_recognize recognize.launch.py
