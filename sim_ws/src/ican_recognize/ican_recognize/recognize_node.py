@@ -31,6 +31,7 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from nav_msgs.msg import Odometry
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
@@ -474,9 +475,20 @@ def main():
     node = RecognizeNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # 收到 SIGINT/SIGTERM（被 pkill、launch 停止等）：
+        # 此时 rclpy context 可能已关闭，清理动作必须容错，
+        # 否则会打出 RCLError: rcl_shutdown already called 的误导性堆栈。
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:  # noqa: BLE001 - 退出阶段任何异常都不应改变退出码
+            pass
+        try:
+            rclpy.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":
