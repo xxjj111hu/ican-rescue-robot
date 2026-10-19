@@ -56,6 +56,8 @@ class SequentialMissionNode(Node):
     def __init__(self):
         super().__init__("sequential_mission_node")
         self.declare_parameter("start_delay_sec", 20.0)
+        # 超过 start_delay + 本值仍收不到 AMCL 位姿，就用 /odom 真值顶上（防死锁）
+        self.declare_parameter("amcl_fallback_sec", 20.0)
         self.declare_parameter("nav_timeout_sec", 120.0)
         self.declare_parameter("goal_retry_sec", 2.0)
         # 进入位（任务点本身，贴图中心）：[x, y, yaw] * 4
@@ -116,6 +118,7 @@ class SequentialMissionNode(Node):
             for i in range(0, len(so), 3)
         ]
         self.recognize_wait = float(self.get_parameter("recognize_wait_sec").value)
+        self.amcl_fallback_sec = float(self.get_parameter("amcl_fallback_sec").value)
         self.base = [float(x) for x in self.get_parameter("base_xyyaw").value]
         self.return_to_base = bool(self.get_parameter("return_to_base").value)
         self.xy_tol = float(self.get_parameter("xy_tol").value)
@@ -166,8 +169,15 @@ class SequentialMissionNode(Node):
             self.on_recog_status,
             event_qos,
         )
+        # /amcl_pose 由 nav2_amcl 以 RELIABLE + TRANSIENT_LOCAL 发布（保留最后一条）。
+        # 订阅端**必须也用 TRANSIENT_LOCAL**，否则 VOLATILE 订阅者只能收到订阅之后
+        # 新发布的消息，拿不到保留的那条 —— 而 AMCL 在机器人静止时不会重新发布位姿，
+        # 于是本节点会永远等不到 AMCL，形成"任务等定位、定位等移动"的死锁。
+        amcl_qos = QoSProfile(depth=10)
+        amcl_qos.reliability = ReliabilityPolicy.RELIABLE
+        amcl_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(
-            PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl, 10
+            PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl, amcl_qos
         )
         # /odom 由 gazebo_ros_planar_move 插件发布，类型为 nav_msgs/msg/Odometry（真值位姿）
         self.create_subscription(
@@ -344,11 +354,23 @@ class SequentialMissionNode(Node):
         if self.state == "WAITING":
             if now - self.boot >= self.start_delay:
                 if self.amcl is None:
-                    # 尚未收到 AMCL 定位，继续等待（避免 Nav2 因未定位而拒目标）
-                    if int(now.nanoseconds // 5e9) != getattr(self, "_last_wait_log", -1):
-                        self._last_wait_log = int(now.nanoseconds // 5e9)
-                        self.get_logger().info("等待 AMCL 定位就绪后再开始导航。")
-                    return
+                    # 兜底：AMCL 长时间不发位姿时，若 /odom 已有数据就用真值位姿顶上。
+                    # 否则会死锁——任务等 AMCL、AMCL 只在机器人移动时才更新位姿，
+                    # 而机器人又因为任务没启动而不动。
+                    overdue = now - self.boot >= (
+                        self.start_delay + Duration(seconds=self.amcl_fallback_sec)
+                    )
+                    if overdue and self.odom is not None:
+                        self.get_logger().warn(
+                            f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
+                            f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
+                        )
+                        self.amcl = dict(self.odom)
+                    else:
+                        if int(now.nanoseconds // 5e9) != getattr(self, "_last_wait_log", -1):
+                            self._last_wait_log = int(now.nanoseconds // 5e9)
+                            self.get_logger().info("等待 AMCL 定位就绪后再开始导航。")
+                        return
                 self.begin_next()
             return
 
