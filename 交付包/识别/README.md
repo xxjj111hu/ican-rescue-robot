@@ -54,8 +54,27 @@ pip3 install -r sim_ws/src/ican_recognize/requirements.txt
 > ⚠️ **必须锁 `numpy<2`**：ROS 2 Humble 的 `cv_bridge` 按 numpy 1.x ABI 编译，
 > 升到 2.x 会让它在 `imgmsg_to_cv2` 时崩溃，且报错不直观。
 > ⚠️ `ultralytics` 会连带装 torch + torchvision（CPU 版约 300~500 MB）。
+
+**装完后必须把 setuptools 退回系统版本**（`ultralytics` 会把它升到 8x，连带破坏 `colcon build`）：
+
+```bash
+pip3 uninstall -y setuptools
+python3 -c "import setuptools; print('setuptools', setuptools.__version__)"   # 期望 59.6.0
+```
+
+> 不退回会这样报错：
+> - `colcon-core requires setuptools<80` （依赖冲突）
+> - `TypeError: canonicalize_version() got an unexpected keyword argument 'strip_trailing_zero'`
+>   （setuptools 79.x 需要 packaging>=22，而 Ubuntu 22.04 是 21.3）
 >
-> 验证：`python3 -c "import cv_bridge, ultralytics, numpy; print('OK', numpy.__version__)"`
+> 系统自带 59.6.0 与 packaging 21.3 配套，且满足 colcon 的 `>=30.3.0,<80`。
+
+验证：
+
+```bash
+python3 -c "import cv_bridge, ultralytics, numpy, setuptools; \
+            print('numpy', numpy.__version__, '| setuptools', setuptools.__version__)"
+```
 
 ### 1. 准备模型（只需一次）
 

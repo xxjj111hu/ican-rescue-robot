@@ -3,12 +3,31 @@
 # 安装：
 #   pip3 install -r requirements.txt
 #
-# ⚠️ 关键约束：numpy 必须锁在 1.x
+# ⚠️ 关键约束 1：numpy 必须锁在 1.x
 #    ROS 2 Humble 的 cv_bridge 是按 numpy 1.x 的 ABI 编译的，
 #    装成 numpy 2.x 会让 cv_bridge 在 import 或 imgmsg_to_cv2 时崩溃，
 #    而且报错信息不直观（AttributeError / _ARRAY_API not found），很难排查。
 #
-# ⚠️ ultralytics 会连带安装 torch + torchvision（CPU 版约 300~500 MB）。
+# ⚠️ 关键约束 2：setuptools 装完后必须退回系统版本（Ubuntu 22.04 = 59.6.0）
+#    原因：ultralytics 会把 setuptools 连带升到 8x，引发两个连锁问题：
+#      a) colcon-core 要求 setuptools < 80，升上去后 colcon build 直接报依赖冲突
+#      b) 即使降到 79.x，它又会调用 packaging>=22 才有的
+#         canonicalize_version(strip_trailing_zero=...)，而 Ubuntu 22.04 自带的
+#         packaging 是 21.3 → colcon build 报
+#         TypeError: canonicalize_version() got an unexpected keyword argument
+#    修法（装完 ultralytics 后执行）：
+#      pip3 uninstall -y setuptools
+#      python3 -c "import setuptools; print(setuptools.__version__)"   # 应为 59.6.0
+#    59.6.0 满足 colcon 的 >=30.3.0,<80 要求，且与系统 packaging 21.3 配套。
+#
+# ⚠️ 约束 3：ultralytics 会连带安装 torch + torchvision（CPU 版约 300~500 MB）。
+#    若安装时带上了 CUDA 相关包（nvidia-*、triton）且不需要 GPU，可换成 CPU-only：
+#      pip3 install --force-reinstall torch torchvision \
+#           --index-url https://download.pytorch.org/whl/cpu
+#
+# 安装后自检：
+#   python3 -c "import cv_bridge, ultralytics, numpy, setuptools; \
+#               print('numpy', numpy.__version__, '| setuptools', setuptools.__version__)"
 
 numpy<2
 ultralytics
