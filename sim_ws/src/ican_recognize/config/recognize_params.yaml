@@ -1,0 +1,52 @@
+# 识别节点参数（B-03/B-05 补全）
+# 用法：
+#   ros2 run ican_recognize recognize_node --ros-args --params-file <本文件>
+#   ros2 launch ican_recognize recognize.launch.py
+#
+# 模型准备（只需一次）：
+#   mkdir -p ~/.ros/ican_recognize
+#   cp 交付包/识别/模型/best.pt ~/.ros/ican_recognize/best.pt
+
+/ican_recognize_node:
+  ros__parameters:
+    # ---- 模型 ----
+    mode: yolo                      # yolo | classifier（classifier 需 runs_cls/best.pt）
+    model_path: ~/.ros/ican_recognize/best.pt
+    cls_model_path: ~/.ros/ican_recognize/best.pt
+    imgsz: 640
+    conf_thres: 0.20
+    iou_thres: 0.45
+
+    # ---- 话题 ----
+    image_topic: /camera/image
+    odom_topic: /odom
+    detections_topic: /referee/detections
+    result_topic: /detection/result
+    status_topic: /ican_recognize/status
+    debug_image_topic: /ican_recognize/debug_image
+    publish_result: true
+    publish_status: true
+    publish_debug_image: true
+
+    # ---- 多帧投票 ----
+    vote_window: 7
+    vote_min: 4
+    min_conf_publish: 0.45
+    min_publish_interval: 2.0
+
+    # ---- 易混淆类别抬高阈值（B-02 缓解）----
+    # 「被困人员」与「受损车辆」外观接近：宁可漏报，也不发错误话术（错报 = 该点 0 分）
+    class_min_conf: "trapped_people:0.60,damaged_vehicle:0.60"
+
+    # ---- 距离门控（关键）----
+    # 实测：0.6m 2/5、0.8m 15/15、1.4m 2/5 → 只在 0.55~1.05m 窗口内接受投票
+    gate_enable: true
+    gate_min_dist: 0.55
+    gate_max_dist: 1.05
+
+    # ---- 超时兜底 ----
+    # 窗口内持续该时长仍无法发布 → 发 status=timeout，mission 继续下一点
+    detect_timeout_sec: 5.0
+
+    fps_log_every: 30
+    status_log_every: 5.0
