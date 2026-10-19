@@ -1,11 +1,84 @@
-# iCAN 陆地清障任务 - 任务点坐标（map 坐标系，仿真实测权威值）
-# 说明：以下坐标与《任务说明书》及赛题一致，导航模块与识别模块共用同一套坐标。
-task_points:
-  task_1: {x: 0.031, y: -1.360, yaw: 0.0}
-  task_2: {x: 0.027, y: -2.700, yaw: 0.0}
-  task_3: {x: 1.120, y: -1.914, yaw: 1.5708}
-  task_4: {x: 1.120, y: -0.785, yaw: 1.5708}
-base:
-  x: 0.0
-  y: 0.0
-  yaw: 0.0
+# 顺序导航任务参数（两段导航：识别位 → 进入位）
+#
+# 每个任务点走两段：
+#   ① standoff（识别位）：贴图前方约 0.70 m、车头朝贴图 —— 相机在这里能拍到地面图
+#   ② point（进入位）：贴图中心 = 任务点本身 —— 判分细则 §（5）要求"完全进入任务点内"
+#
+# 坐标来源：
+#   standoff 来自识别模块 goto_pose.py 的 STANDOFF_POSES
+#     （已用地图占据栅格校验，0.25 m 半径内无占据，实测停车误差 2~4 cm）
+#   point 即场地贴图中心坐标（与 land_shoot.world 一致）
+#
+# 人眼可读对照表：
+#   点位   standoff (x, y, yaw)          point (x, y, yaw)
+#   1     (0.031, -0.660, -1.5708)      (0.031, -1.360, 0.0000)
+#   2     (0.027, -2.000, -1.5708)      (0.027, -2.700, 0.0000)
+#   3     (0.420, -1.914,  0.0000)      (1.120, -1.914, 1.5708)
+#   4     (0.420, -0.785,  0.0000)      (1.120, -0.785, 1.5708)
+#
+# 注意：下面是 ROS 2 参数格式（扁平数组，每 3 个数一组 x,y,yaw），
+#       改坐标时请同时更新上面的对照表，避免两边不一致。
+
+/sequential_mission_node:
+  ros__parameters:
+    use_sim_time: true
+
+    # 进入位（贴图中心）：[x, y, yaw] × 4
+    waypoints: [
+        0.031, -1.360,  0.0,
+        0.027, -2.700,  0.0,
+        1.120, -1.914,  1.5708,
+        1.120, -0.785,  1.5708,
+    ]
+
+    # 识别位（贴图前方 0.70 m、车头朝贴图）：[x, y, yaw] × 4
+    # 留空 [] 则跳过识别位，退化为原来的单段导航
+    standoff_waypoints: [
+        0.031, -0.660, -1.5708,
+        0.027, -2.000, -1.5708,
+        0.420, -1.914,  0.0,
+        0.420, -0.785,  0.0,
+    ]
+
+    # 指挥中心（返航与停车目标）
+    base_xyyaw: [0.0, 0.0, 0.0]
+    return_to_base: true
+
+    # ---- 识别等待 ----
+    # 停在识别位后最多等这么久的话术；超时也继续进入点位，保证全程不中断
+    recognize_wait_sec: 8.0
+    detections_topic: /referee/detections
+    recognize_status_topic: /ican_recognize/status
+
+    # ---- 裁判系统话题（判分硬要求）----
+    referee_target_topic: /referee/current_target   # shoot_1 … shoot_4
+    referee_finish_topic: /referee/finish           # finish:return_start
+    finish_message: "finish:return_start"
+
+    # ---- 导航与停车容差（实测标定）----
+    xy_tol: 0.15
+    yaw_tol: 0.12
+    park_tol: 0.15
+    nav_timeout_sec: 120.0
+    goal_retry_sec: 2.0
+    start_delay_sec: 20.0
+    settle_sec: 2.0
+    nudge_speed: 0.1
+    nudge_max_sec: 12.0
+
+    # 射击：瞄准算法（D-01）尚未接入，默认关闭，只发 shoot_N 声明不实弹
+    # 说明：细则规定"命中第一发后该点不再计分"，胡乱射击可能锁死错误成绩
+    enable_shooting: false
+
+    event_topic: /mission/event
+    navigate_action: /navigate_to_pose
+    cmd_vel_topic: /cmd_vel
+    fire_service: /shooter/shoot
+
+/speed_monitor_node:
+  ros__parameters:
+    use_sim_time: true
+    topic: /cmd_vel
+    max_linear_speed: 0.5
+    summary_period_sec: 30.0
+    report_file: ""          # 留空则不写文件（原为个人绝对路径）

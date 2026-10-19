@@ -1,15 +1,28 @@
-"""顺序导航 + 返航停车 状态机（任务13 / 任务14）。
+"""顺序导航 + 识别等待 + 射击点声明 + 返航停车 状态机（任务13 / 任务14 / 集成）。
 
-流程：等待定位初始化 -> 依次导航到 1、2、3、4 号任务点（每个点到达后判定进点有效，
-       可选发布识别/射击事件）-> 返回指挥中心(0,0) -> 停车微调 -> 稳定刹停 -> 输出结果报告。
+每个任务点走「两段导航」：
+
+    ① 导航到 standoff（识别位：贴图前方约 0.70 m，车头朝贴图）
+       → 停稳，等待识别话术（订阅 /referee/detections）
+       → 最多等 recognize_wait_sec 秒，收不到也继续（不能卡死全程）
+    ② 导航到 point（进入位：贴图中心 = 任务点本身）
+       → 发 /referee/current_target = shoot_N（判分要求，射击前必须声明）
+       → 若 enable_shooting=true 则调 /shooter/shoot
+    重复 4 个点 → 返回指挥中心 → 停车微调 → 稳定刹停
+    → 发 /referee/finish = finish:return_start
+    → 输出结果报告
+
+为什么必须两段：任务说明书要求「到点前识别发话术 → 进入点位 → 发 shoot_N」；
+判分细则 §（5）还规定「未完全进入任务点内」会影响得分。只停在 0.7 m 处不进入
+点位，到达分可能拿不到；而停在贴图上又会让相机拍不到地面图、识别必然失败。
 
 同时采集定位误差（AMCL 位姿 vs /odom 真值），作为《地图与定位精度校验》的输入数据。
 
-注意：本节点只负责“导航框架”。每个任务点的“识别话术 + 射击”由识别模块接入：
-      - 到达任务点时本节点向 /mission/event 发布 reached:<label>；
-      - 若 enable_shooting=true，则调用 /shooter/shoot 触发射击（占位，识别模块接管瞄准逻辑）。
+本节点向 /mission/event 发布事件：reached:<label> / shoot:<n> / returned:base / parked。
 """
+import json
 import math
+import os
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion, Twist
@@ -45,7 +58,7 @@ class SequentialMissionNode(Node):
         self.declare_parameter("start_delay_sec", 20.0)
         self.declare_parameter("nav_timeout_sec", 120.0)
         self.declare_parameter("goal_retry_sec", 2.0)
-        # 任务点：[x, y, yaw] * 4
+        # 进入位（任务点本身，贴图中心）：[x, y, yaw] * 4
         self.declare_parameter(
             "waypoints",
             [
@@ -55,6 +68,25 @@ class SequentialMissionNode(Node):
                 1.120, -0.785, math.pi / 2.0,
             ],
         )
+        # 识别位（贴图前方约 0.70 m，车头朝贴图）：[x, y, yaw] * 4
+        # 来自识别模块 goto_pose.py 的 STANDOFF_POSES（已用地图占据栅格校验 0.25m 内无障碍）
+        # 留空则跳过「先到识别位」这一步，退化为原来的单段导航。
+        self.declare_parameter(
+            "standoff_waypoints",
+            [
+                0.031, -0.660, -math.pi / 2.0,
+                0.027, -2.000, -math.pi / 2.0,
+                0.420, -1.914, 0.0,
+                0.420, -0.785, 0.0,
+            ],
+        )
+        # 识别等待：停稳后最多等这么久的话术；收不到也继续（保证全程不中断）
+        self.declare_parameter("recognize_wait_sec", 8.0)
+        self.declare_parameter("detections_topic", "/referee/detections")
+        self.declare_parameter("recognize_status_topic", "/ican_recognize/status")
+        self.declare_parameter("referee_target_topic", "/referee/current_target")
+        self.declare_parameter("referee_finish_topic", "/referee/finish")
+        self.declare_parameter("finish_message", "finish:return_start")
         self.declare_parameter("base_xyyaw", [0.0, 0.0, 0.0])
         self.declare_parameter("return_to_base", True)
         self.declare_parameter("xy_tol", 0.15)
@@ -70,7 +102,7 @@ class SequentialMissionNode(Node):
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter(
             "result_file",
-            "/home/ican/Ican_fly/demo_shoot_ws/logs/mission_result.txt",
+            os.path.expanduser("~/.ros/ican_nav_tasks/mission_result.txt"),
         )
 
         wp = self.get_parameter("waypoints").value
@@ -78,6 +110,12 @@ class SequentialMissionNode(Node):
             (float(wp[i]), float(wp[i + 1]), float(wp[i + 2]))
             for i in range(0, len(wp), 3)
         ]
+        so = self.get_parameter("standoff_waypoints").value
+        self.standoffs = [
+            (float(so[i]), float(so[i + 1]), float(so[i + 2]))
+            for i in range(0, len(so), 3)
+        ]
+        self.recognize_wait = float(self.get_parameter("recognize_wait_sec").value)
         self.base = [float(x) for x in self.get_parameter("base_xyyaw").value]
         self.return_to_base = bool(self.get_parameter("return_to_base").value)
         self.xy_tol = float(self.get_parameter("xy_tol").value)
@@ -104,6 +142,29 @@ class SequentialMissionNode(Node):
         event_qos.durability = DurabilityPolicy.VOLATILE
         self.event_pub = self.create_publisher(
             String, str(self.get_parameter("event_topic").value), event_qos
+        )
+        # 裁判系统话题（判分要求，QoS RELIABLE）
+        self.target_pub = self.create_publisher(
+            String, str(self.get_parameter("referee_target_topic").value), event_qos
+        )
+        self.finish_pub = self.create_publisher(
+            String, str(self.get_parameter("referee_finish_topic").value), event_qos
+        )
+        # 订阅识别话术与识别状态，用于「停在识别位后等话术」
+        self.got_script = False
+        self.last_script = None
+        self.recog_state = None
+        self.create_subscription(
+            String,
+            str(self.get_parameter("detections_topic").value),
+            self.on_detection,
+            event_qos,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("recognize_status_topic").value),
+            self.on_recog_status,
+            event_qos,
         )
         self.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl, 10
@@ -134,6 +195,7 @@ class SequentialMissionNode(Node):
         self.odom = None
         self.nudge_start = None
         self.settle_start = None
+        self.recog_deadline = None
         self.loc_dx = []
         self.loc_dy = []
         self.wp_errors = []  # (label, err) AMCL vs 目标坐标
@@ -167,6 +229,46 @@ class SequentialMissionNode(Node):
             "y": p.position.y,
             "yaw": yaw_of(p.orientation),
         }
+
+    # ---------------- 识别回调 ----------------
+    def on_detection(self, msg):
+        """收到识别话术（说明识别模块已经发布过结果）。"""
+        text = msg.data.strip()
+        if not text:
+            return
+        if not self.got_script:
+            self.get_logger().info(f"[识别] 收到话术：{text}")
+        self.got_script = True
+        self.last_script = text
+
+    def on_recog_status(self, msg):
+        """识别模块状态：idle/in_window/published/forced/timeout。"""
+        try:
+            data = json.loads(msg.data)
+        except Exception:  # noqa: BLE001
+            return
+        state = data.get("state")
+        self.recog_state = state
+        # timeout / forced 都算「本次识别已有结论」，不必再等
+        if state in ("published", "forced", "timeout"):
+            if not self.got_script:
+                self.get_logger().info(f"[识别] 状态={state}（点位 {data.get('point')}）")
+            self.got_script = True
+
+    def publish_referee_target(self, index):
+        """射击前声明当前点位：shoot_1 … shoot_4（判分硬要求）。"""
+        m = String()
+        m.data = f"shoot_{index}"
+        self.target_pub.publish(m)
+        self.publish_event(f"shoot:{index}")
+        self.get_logger().info(f"[裁判] 已发布 /referee/current_target = {m.data}")
+
+    def publish_referee_finish(self):
+        """返航停车完成后发布完成声明。"""
+        m = String()
+        m.data = str(self.get_parameter("finish_message").value)
+        self.finish_pub.publish(m)
+        self.get_logger().info(f"[裁判] 已发布 /referee/finish = {m.data}")
 
     def publish_event(self, text):
         m = String()
@@ -303,14 +405,27 @@ class SequentialMissionNode(Node):
                 self.finish_parking()
             return
 
+        if self.state == "WAIT_RECOGNITION":
+            # 停在识别位原地等待，别漂移
+            self.stop_robot()
+            if self.got_script:
+                self.get_logger().info(
+                    f"[识别] 点位 {self.wp_index + 1} 已获得识别结果，进入点位。"
+                )
+                self.goto_point()
+                return
+            if self.recog_deadline is not None and now >= self.recog_deadline:
+                self.get_logger().warn(
+                    f"[识别] 点位 {self.wp_index + 1} 等待 "
+                    f"{self.recognize_wait:.1f}s 仍未收到话术，"
+                    f"仍继续进入点位（不中断全程）。"
+                )
+                self.goto_point()
+            return
+
     def begin_next(self):
         if self.wp_index < len(self.waypoints):
-            x, y, yaw = self.waypoints[self.wp_index]
-            self.goal_retries = 0
-            if not self.send_goal(x, y, yaw, f"task_{self.wp_index + 1}"):
-                self.get_logger().warn("Nav2 action server 未就绪，回到等待重发。")
-                self.state = "WAITING"
-                return
+            self.go_to_standoff()
         else:
             if self.return_to_base:
                 x, y, yaw = self.base
@@ -321,6 +436,36 @@ class SequentialMissionNode(Node):
                     return
             else:
                 self.finish_mission()
+
+    def go_to_standoff(self):
+        """第一段：导航到识别位（贴图前方约 0.70 m）。没有配置识别位则直接进点位。"""
+        i = self.wp_index
+        if i < len(self.standoffs):
+            x, y, yaw = self.standoffs[i]
+            # 每次进点位前重置识别等待状态，避免拿到上一个点的旧话术
+            self.got_script = False
+            self.last_script = None
+            self.recog_state = None
+            self.goal_retries = 0
+            if not self.send_goal(x, y, yaw, f"task_{i + 1}:standoff"):
+                self.get_logger().warn("Nav2 action server 未就绪，回到等待重发。")
+                self.state = "WAITING"
+                return
+        else:
+            self.goto_point()
+
+    def goto_point(self):
+        """第二段：导航到进入位（任务点本身 / 贴图中心）。"""
+        i = self.wp_index
+        if i < len(self.waypoints):
+            x, y, yaw = self.waypoints[i]
+            self.goal_retries = 0
+            if not self.send_goal(x, y, yaw, f"task_{i + 1}"):
+                self.get_logger().warn("Nav2 action server 未就绪，回到等待重发。")
+                self.state = "WAITING"
+                return
+        else:
+            self.finish_mission()
 
     def on_arrived(self):
         label = self.current_target[3]
@@ -348,9 +493,25 @@ class SequentialMissionNode(Node):
     def after_arrived(self):
         label = self.current_target[3]
         self.publish_event(f"reached:{label}")
-        if self.enable_shooting:
-            self.fire()
+
+        # ---- 第一段：到达识别位 → 原地等识别话术 ----
+        if label.endswith(":standoff"):
+            self.got_script = False
+            self.recog_deadline = self.get_clock().now() + Duration(
+                seconds=self.recognize_wait
+            )
+            self.get_logger().info(
+                f"[识别] 已到达识别位 {label}，等待话术（最长 "
+                f"{self.recognize_wait:.1f}s）后再进入点位。"
+            )
+            self.state = "WAIT_RECOGNITION"
+            return
+
+        # ---- 第二段：进入任务点 → 声明射击点 → 射击 → 下一点 ----
         if label.startswith("task_"):
+            self.publish_referee_target(self.wp_index + 1)
+            if self.enable_shooting:
+                self.fire()
             self.wp_index += 1
             self.begin_next()
         elif label.startswith("base"):
@@ -422,6 +583,8 @@ class SequentialMissionNode(Node):
             return
         self.state = "DONE"
         self.stop_robot()
+        # 完成声明：判分要求「返回停车后经 /referee/finish 发布完成声明」
+        self.publish_referee_finish()
         self.write_report()
         self.get_logger().info("==== 顺序导航任务完成 ====")
 

@@ -7,6 +7,7 @@ AMCL 定位误差 ≤ 0.1 m。结果打印并可选写入报告文件。
 用法：ros2 run ican_nav_tasks localization_eval_node --ros-args -p duration_sec:=60.0
 """
 import math
+import os
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
@@ -21,7 +22,7 @@ class LocalizationEvalNode(Node):
         self.declare_parameter("duration_sec", 60.0)
         self.declare_parameter(
             "report_file",
-            "/home/ican/Ican_fly/demo_shoot_ws/logs/localization_report.txt",
+            os.path.expanduser("~/.ros/ican_nav_tasks/localization_report.txt"),
         )
         self.dur = float(self.get_parameter("duration_sec").value)
         self.report_file = self.get_parameter("report_file").value
