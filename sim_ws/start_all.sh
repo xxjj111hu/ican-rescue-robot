@@ -77,22 +77,30 @@ sleep 20
 wait_topic /amcl_pose 40 "AMCL 位姿" || { echo "AMCL 未发布位姿，查看 $LOG/nav.log"; exit 1; }
 
 echo "  检查 map -> base_footprint 变换 ..."
-if timeout 8 ros2 run tf2_ros tf2_echo map base_footprint > /dev/null 2>&1; then
+# 注意：tf2_echo 是长驻命令，永远不自己退出，timeout 杀它必然返回非 0。
+# 所以不能用退出码判断，要看它有没有真的打印出变换内容。
+tf_out=$(timeout 8 ros2 run tf2_ros tf2_echo map base_footprint 2>&1 || true)
+if echo "$tf_out" | grep -q "Translation"; then
   echo "  ✅ TF 链通"
 else
-  echo "  ⚠️ TF 查询超时（可能只是 tf2_echo 未及时退出），继续但需留意导航是否报 TF 错误"
+  echo "  ⚠️ TF 查询无输出（可能 AMCL 尚未发布 map->odom），继续但留意导航是否报 TF 错误"
 fi
 
 if [ "$START_RECOG" -eq 1 ]; then
   echo
   echo "=========== 4. 启动识别节点 ==========="
   ros2 launch ican_recognize recognize.launch.py > "$LOG/recog.log" 2>&1 &
-  sleep 8
-  if grep -q "识别节点就绪" "$LOG/recog.log"; then
+  # YOLO 模型加载 + torch 初始化要几秒，必须轮询而不是固定 sleep
+  recog_ok=0
+  for _ in $(seq 1 25); do
+    if grep -q "识别节点就绪" "$LOG/recog.log" 2>/dev/null; then recog_ok=1; break; fi
+    sleep 2
+  done
+  if [ "$recog_ok" -eq 1 ]; then
     echo "  ✅ 识别节点就绪"
     grep "识别节点就绪" "$LOG/recog.log" | tail -1
   else
-    echo "  ❌ 识别节点未就绪，查看 $LOG/recog.log"
+    echo "  ❌ 识别节点 50s 内未就绪，查看 $LOG/recog.log"
     tail -20 "$LOG/recog.log"
     exit 1
   fi
