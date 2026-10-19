@@ -14,9 +14,9 @@
 
 距离门控（B-03/B-05 补全）
 ------------------------------------------------------------------
-实测识别只在相机到贴图约 0.8 m 时可靠（0.6m 2/5、1.4m 2/5）。
+实测识别只在相机到贴图约 0.8 m 时可靠（0.6m 2/5、0.8m 15/15、0.9m 4/5、1.4m 2/5）。
 本节点订阅 /odom，实时计算到最近地面贴图点的距离，**只有落在
-[gate_min_dist, gate_max_dist] 窗口内才接受投票并发布话术**；
+[gate_min_dist, gate_max_dist]（默认 0.60~0.90 m）窗口内才接受投票并发布话术**；
 离开窗口清空投票历史与已发布锁存，避免在远处（准确率仅 40%）
 就发出错误话术。窗口内超过 detect_timeout_sec 仍无法发布时，发
 status=timeout 通知 mission 继续下一点，保证全程不中断。
@@ -103,10 +103,11 @@ class RecognizeNode(Node):
         self.declare_parameter("min_publish_interval", 2.0)
         self.declare_parameter("fps_log_every", 30)
 
-        # 距离门控
+        # 距离门控（窗口依据实测标定，见 交付包/识别/鲁棒性测试报告.md「门控实测」）
+        # 实测命中：0.6m 2/5、0.7m 3/5、0.8m 15/15、0.9m 4/5、1.1m 3/5、1.4m 2/5
         self.declare_parameter("gate_enable", True)
-        self.declare_parameter("gate_min_dist", 0.55)
-        self.declare_parameter("gate_max_dist", 1.05)
+        self.declare_parameter("gate_min_dist", 0.60)
+        self.declare_parameter("gate_max_dist", 0.90)
         self.declare_parameter("detect_timeout_sec", 5.0)
         self.declare_parameter("status_log_every", 5.0)
 

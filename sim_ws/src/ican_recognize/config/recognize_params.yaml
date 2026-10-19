@@ -39,10 +39,12 @@
     class_min_conf: "trapped_people:0.60,damaged_vehicle:0.60"
 
     # ---- 距离门控（关键）----
-    # 实测：0.6m 2/5、0.8m 15/15、1.4m 2/5 → 只在 0.55~1.05m 窗口内接受投票
+    # 窗口由实测标定，见 交付包/识别/鲁棒性测试报告.md「门控实测」一节：
+    #   0.6m 2/5、0.7m 3/5、0.8m 15/15、0.9m 4/5、1.1m 3/5、1.4m 2/5
+    # 停车位在 0.70m，取 [0.60, 0.90] 使下界留 10cm、上界留 20cm 余量。
     gate_enable: true
-    gate_min_dist: 0.55
-    gate_max_dist: 1.05
+    gate_min_dist: 0.60
+    gate_max_dist: 0.90
 
     # ---- 超时兜底 ----
     # 窗口内持续该时长仍无法发布 → 发 status=timeout，mission 继续下一点
