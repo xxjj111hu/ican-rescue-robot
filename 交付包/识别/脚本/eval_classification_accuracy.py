@@ -169,7 +169,10 @@ def main() -> int:
 
     print("混淆矩阵（行=真实，列=预测）")
     pred_cols = CLASSES + ["(未检出)"]
-    header = f"{'真实\\预测':<10}" + "".join(f"{ZH[c][:4]:>8}" for c in CLASSES) + f"{'未检出':>8}"
+    # 注意：Python 3.10 的 f-string 表达式里不能出现反斜杠，
+    # 所以表头左标签先单独赋值，不要写成 {'真实\\预测':<10}
+    hdr_left = "真实\\预测"
+    header = f"{hdr_left:<10}" + "".join(f"{ZH[c][:4]:>8}" for c in CLASSES) + f"{'未检出':>8}"
     print(header)
     for t in CLASSES:
         if per_class_total[t] == 0:
