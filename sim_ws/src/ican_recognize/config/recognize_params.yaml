@@ -23,6 +23,9 @@
     detections_topic: /referee/detections
     result_topic: /detection/result
     status_topic: /ican_recognize/status
+    # 射击靶位：发布「识别类别 -> 该打哪个靶」的结构化结果（判分细则表 7）
+    #   {"class","rotate_target","moving_target","conf","point","dist","source","script"}
+    target_topic: /ican_recognize/target
     debug_image_topic: /ican_recognize/debug_image
     publish_result: true
     publish_status: true

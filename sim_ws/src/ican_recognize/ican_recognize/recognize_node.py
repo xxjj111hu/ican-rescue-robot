@@ -37,7 +37,13 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from ican_recognize.scripts_table import CLASS_ORDER, CLASS_SCRIPT, validate_scripts
+from ican_recognize.scripts_table import (
+    CLASS_ORDER,
+    CLASS_SCRIPT,
+    target_ids,
+    validate_scripts,
+    validate_targets,
+)
 
 # 5 个地面贴图的真实中心坐标（与 land_shoot.world / goto_pose.py 一致）
 GROUND_POINTS = {
@@ -75,6 +81,8 @@ class RecognizeNode(Node):
         self.declare_parameter("detections_topic", "/referee/detections")
         self.declare_parameter("result_topic", "/detection/result")
         self.declare_parameter("status_topic", "/ican_recognize/status")
+        # 射击靶位话题：发布「识别类别 -> 该打哪个靶」的结构化结果（判分细则表 7）
+        self.declare_parameter("target_topic", "/ican_recognize/target")
         self.declare_parameter("publish_result", True)
         self.declare_parameter("publish_status", True)
         self.declare_parameter("debug_image_topic", "/ican_recognize/debug_image")
@@ -141,6 +149,16 @@ class RecognizeNode(Node):
         else:
             self.get_logger().info("[话术自检] 5 条话术均含裁判匹配关键词，通过")
 
+        t_issues = validate_targets()
+        if t_issues:
+            for msg in t_issues:
+                self.get_logger().error(f"[靶位自检] {msg}")
+        else:
+            self.get_logger().info(
+                "[靶位自检] 表 7 映射通过：旋转靶 1~5 = 坍塌/滑坡/被困/受损/营地；"
+                "移动靶 6=坍塌·滑坡, 7=被困·受损, 8=营地"
+            )
+
         self.class_names = {i: n for i, n in enumerate(CLASS_ORDER)}
         if self.mode == "classifier":
             self._init_classifier()
@@ -152,6 +170,7 @@ class RecognizeNode(Node):
         det_topic = str(self.get_parameter("detections_topic").value)
         result_topic = str(self.get_parameter("result_topic").value)
         status_topic = str(self.get_parameter("status_topic").value)
+        target_topic = str(self.get_parameter("target_topic").value)
         debug_topic = str(self.get_parameter("debug_image_topic").value)
         self.publish_debug = bool(self.get_parameter("publish_debug_image").value)
         self._debug_every = max(1, int(self.get_parameter("debug_every").value))
@@ -162,6 +181,7 @@ class RecognizeNode(Node):
         self.det_pub = self.create_publisher(String, det_topic, det_qos)
         self.result_pub = self.create_publisher(String, result_topic, 10)
         self.status_pub = self.create_publisher(String, status_topic, det_qos)
+        self.target_pub = self.create_publisher(String, target_topic, det_qos)
         self.debug_pub = (
             self.create_publisher(Image, debug_topic, 10) if self.publish_debug else None
         )
@@ -293,6 +313,37 @@ class RecognizeNode(Node):
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.status_pub.publish(msg)
 
+    def _publish_target(self, cls_name, conf, point, dist, source):
+        """发布「识别类别 -> 该打哪个靶」的结构化结果。
+
+        依据《判分细则 V1.0》第 5 章 表 7：
+          旋转靶 1~5 号分别对应 坍塌废墟/滑坡塌方/被困人员/受损车辆/救援营地
+          移动靶 6 号对应 坍塌废墟、滑坡塌方；7 号对应 被困人员、受损车辆；8 号对应 救援营地
+
+        射击节点订阅本话题即可知道该瞄准哪个靶位。
+        注意细则 1.3(3)「首击锁定」：命中第一发后该点位不再计分，
+        所以打错靶的代价就是丢掉该点位 —— 靶位号必须来自识别结果，不能猜。
+        """
+        if cls_name is None:
+            return
+        ids = target_ids(cls_name)
+        if ids.get("rotate") is None and ids.get("moving") is None:
+            return
+        payload = {
+            "class": cls_name,
+            "rotate_target": ids.get("rotate"),
+            "moving_target": ids.get("moving"),
+            "conf": None if conf is None else round(float(conf), 4),
+            "point": point,
+            "dist": None if dist is None else round(float(dist), 3),
+            "source": source,
+            "script": CLASS_SCRIPT.get(cls_name),
+            "t": round(time.time(), 3),
+        }
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.target_pub.publish(msg)
+
     def _entered_window(self, pid, dist):
         self._in_window = True
         self._window_point = pid
@@ -390,6 +441,7 @@ class RecognizeNode(Node):
 
         if self.publish_result:
             res = String()
+            _ids = target_ids(cls_name) if cls_name else {"rotate": None, "moving": None}
             res.data = json.dumps(
                 {
                     "class": cls_name or "none",
@@ -399,6 +451,9 @@ class RecognizeNode(Node):
                     "dist": None if dist is None else round(dist, 3),
                     "point": pid,
                     "gated": bool(self.gate_enable and self._in_window),
+                    # 判分细则表 7：该类别对应的射击靶位
+                    "rotate_target": _ids.get("rotate"),
+                    "moving_target": _ids.get("moving"),
                 },
                 ensure_ascii=False,
             )
@@ -436,6 +491,8 @@ class RecognizeNode(Node):
                 self._last_pub_time = now
                 self._last_pub_class = vote_cls
                 self._published_this_approach = True
+                # 同步发布靶位信息，供射击节点使用（判分细则表 7）
+                self._publish_target(vote_cls, conf, pid, dist, "vote")
                 dist_txt = "n/a" if dist is None else f"{dist:.2f}m"
                 self.get_logger().info(
                     f"[识别] {vote_cls}(投票 {vote_n}/{len(self._hist)}, "
@@ -474,6 +531,8 @@ class RecognizeNode(Node):
                 self._last_pub_time = now
                 self._last_pub_class = guess_cls
                 self._published_this_approach = True
+                # 兜底发布也要给出靶位号：这一发是赌的，但靶位号仍是查表得出的
+                self._publish_target(guess_cls, guess_conf, pid, dist, f"forced:{guess_src}")
                 self.get_logger().warn(
                     f"[识别] 点位 {pid} 超时 {self.detect_timeout:.1f}s 未达正常发布条件，"
                     f"按「发错与不发同为 0 分」策略强制发布最优猜测："

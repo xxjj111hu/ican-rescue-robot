@@ -42,6 +42,88 @@ KEYWORDS = {
 CLASS_ORDER = ["trapped_people", "rescue_camp", "collapsed_ruins", "damaged_vehicle", "landslide"]
 
 
+# ===== 地面图片 -> 射击靶位 ID =====
+# 来源：《判分细则 V1.0》第 5 章 表 7「地面图片与靶位 ID 对应关系」
+#   旋转靶 1 号 -> 坍塌废墟      移动靶 6 号 -> 坍塌废墟、滑坡塌方
+#   旋转靶 2 号 -> 滑坡塌方      移动靶 7 号 -> 被困人员、受损车辆
+#   旋转靶 3 号 -> 被困人员      移动靶 8 号 -> 救援营地
+#   旋转靶 4 号 -> 受损车辆
+#   旋转靶 5 号 -> 救援营地
+#
+# 用途：识别出地面图片类别后，据此决定该打哪个靶位。
+# 注意「首击锁定」规则（细则 1.3(3)）：命中第一发后该点位不再计分，
+# 若第一发打错靶（如本该打旋转靶 2 却打了 6），这一发就把该点位成绩用掉了。
+ROTATE_TARGET_ID = {
+    "collapsed_ruins": 1,
+    "landslide": 2,
+    "trapped_people": 3,
+    "damaged_vehicle": 4,
+    "rescue_camp": 5,
+}
+
+MOVING_TARGET_ID = {
+    "collapsed_ruins": 6,
+    "landslide": 6,
+    "trapped_people": 7,
+    "damaged_vehicle": 7,
+    "rescue_camp": 8,
+}
+
+# 冻结基准：表 7 的 8 个靶位，任何改动都会让自检失败
+_FROZEN_ROTATE = {
+    "collapsed_ruins": 1,
+    "landslide": 2,
+    "trapped_people": 3,
+    "damaged_vehicle": 4,
+    "rescue_camp": 5,
+}
+_FROZEN_MOVING = {
+    "collapsed_ruins": 6,
+    "landslide": 6,
+    "trapped_people": 7,
+    "damaged_vehicle": 7,
+    "rescue_camp": 8,
+}
+
+
+def target_ids(cls_name):
+    """返回 {'rotate': 旋转靶号, 'moving': 移动靶号}；未知类别返回 None。"""
+    return {
+        "rotate": ROTATE_TARGET_ID.get(cls_name),
+        "moving": MOVING_TARGET_ID.get(cls_name),
+    }
+
+
+def validate_targets():
+    """表 7 靶位映射自检：5 类全覆盖、与冻结基准一致、靶位号在 1~8 内。"""
+    problems = []
+    for cls in CLASS_ORDER:
+        if cls not in ROTATE_TARGET_ID:
+            problems.append(f"{cls}: 表 7 缺少旋转靶映射")
+        if cls not in MOVING_TARGET_ID:
+            problems.append(f"{cls}: 表 7 缺少移动靶映射")
+    for name, table, frozen in (
+        ("ROTATE_TARGET_ID", ROTATE_TARGET_ID, _FROZEN_ROTATE),
+        ("MOVING_TARGET_ID", MOVING_TARGET_ID, _FROZEN_MOVING),
+    ):
+        for cls, tid in table.items():
+            if cls not in CLASS_ORDER:
+                problems.append(f"{name}: 类别 {cls} 不在 CLASS_ORDER 里")
+            if not isinstance(tid, int) or not (1 <= tid <= 8):
+                problems.append(f"{name}: {cls} 的靶位号 {tid} 超出 1~8")
+            expect = frozen.get(cls)
+            if expect is not None and tid != expect:
+                problems.append(
+                    f"{name}: {cls} 靶位号 {tid} 与冻结基准 {expect} 不一致\n"
+                    f"      → 请回《判分细则 V1.0》表 7 重新核对后再改"
+                )
+    # 旋转靶 1~5 必须一一对应，不能重复
+    rotate_ids = list(ROTATE_TARGET_ID.values())
+    if sorted(rotate_ids) != [1, 2, 3, 4, 5]:
+        problems.append(f"旋转靶号不是 1~5 各一次：{sorted(rotate_ids)}")
+    return problems
+
+
 def validate_scripts(strict=False):
     """返回问题列表；空列表表示 5 条话术自检通过。
 
@@ -81,10 +163,14 @@ def validate_scripts(strict=False):
 
 
 if __name__ == "__main__":
-    issues = validate_scripts(strict=True)
+    issues = validate_scripts(strict=True) + validate_targets()
     if issues:
         print("自检失败：")
         for i in issues:
             print("  -", i)
         raise SystemExit(1)
     print("5 条话术自检通过：均含裁判匹配关键词、与冻结基准逐字一致、标点规范。")
+    print("表 7 靶位映射自检通过：")
+    for cls in CLASS_ORDER:
+        t = target_ids(cls)
+        print(f"  {cls:<16} 旋转靶 {t['rotate']} 号   移动靶 {t['moving']} 号")

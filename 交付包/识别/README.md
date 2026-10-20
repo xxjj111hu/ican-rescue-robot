@@ -120,14 +120,28 @@ ros2 launch ican_recognize recognize.launch.py
 
 参数文件：`sim_ws/src/ican_recognize/config/recognize_params.yaml`
 
-节点输出四个话题：
+节点输出五个话题：
 
 | 话题 | 内容 |
 |---|---|
 | `/referee/detections` | 话术（RELIABLE），5 条与细则表 5 逐字一致 |
-| `/detection/result` | 逐帧 JSON（class/conf/infer_ms/dist/point/gated），用于验证 ≥10 Hz |
+| `/detection/result` | 逐帧 JSON（class/conf/infer_ms/dist/point/gated/**rotate_target**/**moving_target**），用于验证 ≥10 Hz |
 | `/ican_recognize/status` | **【新增】** 门控状态 JSON：`idle / in_window / published / timeout`，供 mission 判断 |
+| `/ican_recognize/target` | **【新增】** **射击靶位 JSON**（判分细则表 7）：`class / rotate_target / moving_target / conf / point / dist / source / script`。射击节点订阅它即可知道该瞄哪个靶；兜底发布时 `source` 为 `forced:vote` 或 `forced:best_frame`，便于复盘区分"真识别对"和"蒙对了" |
 | `/ican_recognize/debug_image` | 画框图（带距离标注） |
+
+**靶位映射（表 7）**：
+
+| 类别 | 旋转靶 | 移动靶 |
+|---|---|---|
+| 坍塌废墟 `collapsed_ruins` | 1 号 | 6 号 |
+| 滑坡塌方 `landslide` | 2 号 | 6 号 |
+| 被困人员 `trapped_people` | 3 号 | 7 号 |
+| 受损车辆 `damaged_vehicle` | 4 号 | 7 号 |
+| 救援营地 `rescue_camp` | 5 号 | 8 号 |
+
+映射表在 `scripts_table.py` 里带冻结基准，`validate_targets()` 自检；节点启动时会打印
+`[靶位自检] 表 7 映射通过…`，改错立即报错。
 
 ### 4. 数据集自检（B-01 验收）
 
