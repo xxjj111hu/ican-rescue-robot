@@ -1,0 +1,123 @@
+[INFO] [launch]: All log files can be found below /home/xxjj/.ros/log/2026-10-20-20-27-40-526111-LAPTOP-8MA8TPGS-5505
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [speed_monitor_node-1]: process started with pid [5508]
+[speed_monitor_node-1] [INFO] [1792499261.007059868] [speed_monitor_node]: 速度监控已启动：话题=/cmd_vel, 硬上限=0.5 m/s
+[INFO] [sequential_mission_node-2]: process started with pid [5566]
+[sequential_mission_node-2] [INFO] [1792499262.194697952] [sequential_mission_node]: 顺序导航节点就绪：4 个任务点，返航=是。任务点坐标=[(0.031, -1.36, 0.0), (0.027, -2.7, 0.0), (1.12, -1.914, 1.5708), (1.12, -0.785, 1.5708)]
+[sequential_mission_node-2] [INFO] [1792499262.195575270] [sequential_mission_node]: [状态机] 驱动方式=墙钟定时器；识别位=[(0.031, -0.66, -1.5708), (0.027, -2.0, -1.5708), (0.42, -1.914, 0.0), (0.42, -0.785, 0.0)]
+[sequential_mission_node-2] [INFO] [1792499282.156571637] [sequential_mission_node]: 发送导航目标 task_1:standoff: (0.031, -0.660, -1.57)
+[sequential_mission_node-2] [INFO] [1792499282.158395916] [sequential_mission_node]: Nav2 已接受导航目标。
+[speed_monitor_node-1] [INFO] [1792499282.199729339] [speed_monitor_node]: [周期] 时长=68.6s 采样=1 最大线速度=0.2285 m/s 超限次数=0 结论=合规
+[sequential_mission_node-2] [INFO] [1792499282.356435076] [sequential_mission_node]: [progress] ->task_1:standoff 剩余=0.616 m amcl=(0.003,-0.045)
+[sequential_mission_node-2] [INFO] [1792499283.968958684] [sequential_mission_node]: [识别] 收到话术：已识别到滑坡塌方，落石阻断救援道路，开始清除障碍，打通救援通道。
+[sequential_mission_node-2] [INFO] [1792499284.356632803] [sequential_mission_node]: 到达目标 task_1:standoff
+[sequential_mission_node-2] [INFO] [1792499284.357042233] [sequential_mission_node]: task_1:standoff 到点误差(AMCL vs 目标)=0.164 m
+[sequential_mission_node-2] [INFO] [1792499284.357327307] [sequential_mission_node]: task_1:standoff 静态定位误差(AMCL vs odom)=0.056 m
+[sequential_mission_node-2] [INFO] [1792499284.357601155] [sequential_mission_node]: task_1:standoff 超出容差，进入微调(NUDGE)。
+[sequential_mission_node-2] [INFO] [1792499284.556486652] [sequential_mission_node]: 微调到位（误差 0.113 m）。
+[sequential_mission_node-2] [INFO] [1792499284.557205792] [sequential_mission_node]: [event] reached:task_1:standoff
+[sequential_mission_node-2] [INFO] [1792499284.557592855] [sequential_mission_node]: [识别] 已到达识别位 task_1:standoff，等待话术（最长 8.0s）后再进入点位。
+[sequential_mission_node-2] [INFO] [1792499286.016549869] [sequential_mission_node]: [识别] 收到话术：已识别到滑坡塌方，落石阻断救援道路，开始清除障碍，打通救援通道。
+[sequential_mission_node-2] [INFO] [1792499286.156744178] [sequential_mission_node]: [识别] 点位 1 已获得识别结果，进入点位。
+[sequential_mission_node-2] [INFO] [1792499286.158192996] [sequential_mission_node]: 发送导航目标 task_1: (0.031, -1.360, 0.00)
+[sequential_mission_node-2] [INFO] [1792499286.159761776] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499288.956191794] [sequential_mission_node]: 到达目标 task_1
+[sequential_mission_node-2] [INFO] [1792499288.956475702] [sequential_mission_node]: task_1 到点误差(AMCL vs 目标)=0.165 m
+[sequential_mission_node-2] [INFO] [1792499288.956769265] [sequential_mission_node]: task_1 静态定位误差(AMCL vs odom)=0.049 m
+[sequential_mission_node-2] [INFO] [1792499288.956969107] [sequential_mission_node]: task_1 超出容差，进入微调(NUDGE)。
+[sequential_mission_node-2] [INFO] [1792499289.156066264] [sequential_mission_node]: 微调到位（误差 0.115 m）。
+[sequential_mission_node-2] [INFO] [1792499289.156531744] [sequential_mission_node]: [event] reached:task_1
+[sequential_mission_node-2] [INFO] [1792499289.156799249] [sequential_mission_node]: [event] shoot:1
+[sequential_mission_node-2] [INFO] [1792499289.157038604] [sequential_mission_node]: [裁判] 已发布 /referee/current_target = shoot_1
+[sequential_mission_node-2] [INFO] [1792499289.157626904] [sequential_mission_node]: 发送导航目标 task_2:standoff: (0.027, -2.000, -1.57)
+[sequential_mission_node-2] [INFO] [1792499289.158777231] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499291.798198300] [sequential_mission_node]: [识别] 收到话术：已识别到救援营地，前方存在障碍，开始清除障碍，建立救援通道。
+[sequential_mission_node-2] [INFO] [1792499291.956474531] [sequential_mission_node]: 到达目标 task_2:standoff
+[sequential_mission_node-2] [INFO] [1792499291.956837689] [sequential_mission_node]: task_2:standoff 到点误差(AMCL vs 目标)=0.155 m
+[sequential_mission_node-2] [INFO] [1792499291.957126331] [sequential_mission_node]: task_2:standoff 静态定位误差(AMCL vs odom)=0.034 m
+[sequential_mission_node-2] [INFO] [1792499291.957342428] [sequential_mission_node]: task_2:standoff 超出容差，进入微调(NUDGE)。
+[sequential_mission_node-2] [INFO] [1792499293.756442806] [sequential_mission_node]: 微调到位（误差 0.109 m）。
+[sequential_mission_node-2] [INFO] [1792499293.756998260] [sequential_mission_node]: [event] reached:task_2:standoff
+[sequential_mission_node-2] [INFO] [1792499293.757298370] [sequential_mission_node]: [识别] 已到达识别位 task_2:standoff，等待话术（最长 8.0s）后再进入点位。
+[sequential_mission_node-2] [INFO] [1792499293.819249089] [sequential_mission_node]: [识别] 收到话术：已识别到救援营地，前方存在障碍，开始清除障碍，建立救援通道。
+[sequential_mission_node-2] [INFO] [1792499293.956279879] [sequential_mission_node]: [识别] 点位 2 已获得识别结果，进入点位。
+[sequential_mission_node-2] [INFO] [1792499293.957131248] [sequential_mission_node]: 发送导航目标 task_2: (0.027, -2.700, 0.00)
+[sequential_mission_node-2] [INFO] [1792499293.958340864] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499294.156470086] [sequential_mission_node]: [progress] ->task_2 剩余=0.686 m amcl=(0.137,-2.023)
+[sequential_mission_node-2] [INFO] [1792499298.156580586] [sequential_mission_node]: 到达目标 task_2
+[sequential_mission_node-2] [INFO] [1792499298.157127555] [sequential_mission_node]: task_2 到点误差(AMCL vs 目标)=0.146 m
+[sequential_mission_node-2] [INFO] [1792499298.157400596] [sequential_mission_node]: task_2 静态定位误差(AMCL vs odom)=0.021 m
+[sequential_mission_node-2] [INFO] [1792499298.157778015] [sequential_mission_node]: [event] reached:task_2
+[sequential_mission_node-2] [INFO] [1792499298.158114121] [sequential_mission_node]: [event] shoot:2
+[sequential_mission_node-2] [INFO] [1792499298.158383539] [sequential_mission_node]: [裁判] 已发布 /referee/current_target = shoot_2
+[sequential_mission_node-2] [INFO] [1792499298.159505572] [sequential_mission_node]: 发送导航目标 task_3:standoff: (0.420, -1.914, 0.00)
+[sequential_mission_node-2] [INFO] [1792499298.162245488] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499301.833740220] [sequential_mission_node]: [识别] 收到话术：已识别到受损车辆，车辆阻碍救援通道，开始清除障碍，实施被困人员救援。
+[sequential_mission_node-2] [INFO] [1792499302.757018010] [sequential_mission_node]: 到达目标 task_3:standoff
+[sequential_mission_node-2] [INFO] [1792499302.757534026] [sequential_mission_node]: task_3:standoff 到点误差(AMCL vs 目标)=0.172 m
+[sequential_mission_node-2] [INFO] [1792499302.757784238] [sequential_mission_node]: task_3:standoff 静态定位误差(AMCL vs odom)=0.053 m
+[sequential_mission_node-2] [INFO] [1792499302.757995611] [sequential_mission_node]: task_3:standoff 超出容差，进入微调(NUDGE)。
+[sequential_mission_node-2] [INFO] [1792499304.756193088] [sequential_mission_node]: 微调到位（误差 0.116 m）。
+[sequential_mission_node-2] [INFO] [1792499304.756641245] [sequential_mission_node]: [event] reached:task_3:standoff
+[sequential_mission_node-2] [INFO] [1792499304.756838428] [sequential_mission_node]: [识别] 已到达识别位 task_3:standoff，等待话术（最长 8.0s）后再进入点位。
+[sequential_mission_node-2] [INFO] [1792499305.857279680] [sequential_mission_node]: [识别] 收到话术：已识别到受损车辆，车辆阻碍救援通道，开始清除障碍，实施被困人员救援。
+[sequential_mission_node-2] [INFO] [1792499305.956472103] [sequential_mission_node]: [识别] 点位 3 已获得识别结果，进入点位。
+[sequential_mission_node-2] [INFO] [1792499305.957131529] [sequential_mission_node]: 发送导航目标 task_3: (1.120, -1.914, 1.57)
+[sequential_mission_node-2] [INFO] [1792499305.958195068] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499306.156247716] [sequential_mission_node]: [progress] ->task_3 剩余=0.789 m amcl=(0.335,-1.993)
+[sequential_mission_node-2] [INFO] [1792499308.156377922] [sequential_mission_node]: 到达目标 task_3
+[sequential_mission_node-2] [INFO] [1792499308.156670619] [sequential_mission_node]: task_3 到点误差(AMCL vs 目标)=0.078 m
+[sequential_mission_node-2] [INFO] [1792499308.156847753] [sequential_mission_node]: task_3 静态定位误差(AMCL vs odom)=0.071 m
+[sequential_mission_node-2] [INFO] [1792499308.157066450] [sequential_mission_node]: [event] reached:task_3
+[sequential_mission_node-2] [INFO] [1792499308.157260071] [sequential_mission_node]: [event] shoot:3
+[sequential_mission_node-2] [INFO] [1792499308.157456872] [sequential_mission_node]: [裁判] 已发布 /referee/current_target = shoot_3
+[sequential_mission_node-2] [INFO] [1792499308.158065078] [sequential_mission_node]: 发送导航目标 task_4:standoff: (0.420, -0.785, 0.00)
+[sequential_mission_node-2] [INFO] [1792499308.159439497] [sequential_mission_node]: Nav2 已接受导航目标。
+[speed_monitor_node-1] [INFO] [1792499312.392841995] [speed_monitor_node]: [周期] 时长=98.6s 采样=555 最大线速度=0.4950 m/s 超限次数=0 结论=合规
+[sequential_mission_node-2] [INFO] [1792499314.850314693] [sequential_mission_node]: [识别] 收到话术：已识别到被困人员，救援通道存在障碍，开始清除障碍，实施被困人员救援。
+[sequential_mission_node-2] [INFO] [1792499316.356370788] [sequential_mission_node]: [progress] ->task_4:standoff 剩余=0.169 m amcl=(0.492,-0.938)
+[sequential_mission_node-2] [INFO] [1792499318.756224627] [sequential_mission_node]: 到达目标 task_4:standoff
+[sequential_mission_node-2] [INFO] [1792499318.756597267] [sequential_mission_node]: task_4:standoff 到点误差(AMCL vs 目标)=0.149 m
+[sequential_mission_node-2] [INFO] [1792499318.756802059] [sequential_mission_node]: task_4:standoff 静态定位误差(AMCL vs odom)=0.039 m
+[sequential_mission_node-2] [INFO] [1792499318.757054485] [sequential_mission_node]: [event] reached:task_4:standoff
+[sequential_mission_node-2] [INFO] [1792499318.757345784] [sequential_mission_node]: [识别] 已到达识别位 task_4:standoff，等待话术（最长 8.0s）后再进入点位。
+[sequential_mission_node-2] [INFO] [1792499318.873614312] [sequential_mission_node]: [识别] 收到话术：已识别到被困人员，救援通道存在障碍，开始清除障碍，实施被困人员救援。
+[sequential_mission_node-2] [INFO] [1792499318.956351207] [sequential_mission_node]: [识别] 点位 4 已获得识别结果，进入点位。
+[sequential_mission_node-2] [INFO] [1792499318.957124210] [sequential_mission_node]: 发送导航目标 task_4: (1.120, -0.785, 1.57)
+[sequential_mission_node-2] [INFO] [1792499318.958204524] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499320.756243909] [sequential_mission_node]: 到达目标 task_4
+[sequential_mission_node-2] [INFO] [1792499320.756528328] [sequential_mission_node]: task_4 到点误差(AMCL vs 目标)=0.149 m
+[sequential_mission_node-2] [INFO] [1792499320.756704184] [sequential_mission_node]: task_4 静态定位误差(AMCL vs odom)=0.036 m
+[sequential_mission_node-2] [INFO] [1792499320.756916107] [sequential_mission_node]: [event] reached:task_4
+[sequential_mission_node-2] [INFO] [1792499320.757109155] [sequential_mission_node]: [event] shoot:4
+[sequential_mission_node-2] [INFO] [1792499320.757287039] [sequential_mission_node]: [裁判] 已发布 /referee/current_target = shoot_4
+[sequential_mission_node-2] [INFO] [1792499320.758027439] [sequential_mission_node]: 发送导航目标 base(return): (0.000, 0.000, 0.00)
+[sequential_mission_node-2] [INFO] [1792499320.759116929] [sequential_mission_node]: Nav2 已接受导航目标。
+[sequential_mission_node-2] [INFO] [1792499326.356405361] [sequential_mission_node]: [progress] ->base(return) 剩余=0.223 m amcl=(0.141,-0.173)
+[sequential_mission_node-2] [INFO] [1792499332.357009096] [sequential_mission_node]: 到达目标 base(return)
+[sequential_mission_node-2] [INFO] [1792499332.357387872] [sequential_mission_node]: base(return) 到点误差(AMCL vs 目标)=0.156 m
+[sequential_mission_node-2] [INFO] [1792499332.357606857] [sequential_mission_node]: base(return) 静态定位误差(AMCL vs odom)=0.007 m
+[sequential_mission_node-2] [INFO] [1792499332.357814622] [sequential_mission_node]: base(return) 超出容差，进入微调(NUDGE)。
+[sequential_mission_node-2] [INFO] [1792499334.156405996] [sequential_mission_node]: 微调到位（误差 0.118 m）。
+[sequential_mission_node-2] [INFO] [1792499334.156971503] [sequential_mission_node]: [event] reached:base(return)
+[sequential_mission_node-2] [INFO] [1792499334.157181811] [sequential_mission_node]: [event] returned:base
+[sequential_mission_node-2] [INFO] [1792499334.356366659] [sequential_mission_node]: 微调到位（误差 0.118 m）。
+[sequential_mission_node-2] [INFO] [1792499336.557136796] [sequential_mission_node]: 停车完成，停车误差=0.118 m（容差 0.15 m）
+[sequential_mission_node-2] [INFO] [1792499336.557913560] [sequential_mission_node]: [event] parked:err=0.118
+[sequential_mission_node-2] [INFO] [1792499336.558407916] [sequential_mission_node]: [裁判] 已发布 /referee/finish = finish:return_start
+[sequential_mission_node-2] [INFO] [1792499336.558775434] [sequential_mission_node]: ==== 导航任务结果 ====
+[sequential_mission_node-2] 任务点到达误差(AMCL vs 目标坐标):
+[sequential_mission_node-2]   task_1:standoff: 0.164 m
+[sequential_mission_node-2]   task_1: 0.165 m
+[sequential_mission_node-2]   task_2:standoff: 0.155 m
+[sequential_mission_node-2]   task_2: 0.146 m
+[sequential_mission_node-2]   task_3:standoff: 0.172 m
+[sequential_mission_node-2]   task_3: 0.078 m
+[sequential_mission_node-2]   task_4:standoff: 0.149 m
+[sequential_mission_node-2]   task_4: 0.149 m
+[sequential_mission_node-2]   base(return): 0.156 m
+[sequential_mission_node-2] 定位精度(AMCL vs 真值/odom, 全程含运动): RMS=0.0370 m, MAX=0.0789 m, 样本=148 -> PASS(≤0.1m)
+[sequential_mission_node-2] 静态定位误差(各点到点瞬间 AMCL vs 真值): RMS=0.0444 m, MAX=0.0709 m, 样本=9 -> PASS(≤0.1m)
+[sequential_mission_node-2] 停车误差(AMCL vs 指挥中心): 0.118 m
+[sequential_mission_node-2] [WARN] [1792499336.559092097] [sequential_mission_node]: 写结果文件失败: [Errno 2] No such file or directory: '/home/xxjj/.ros/ican_nav_tasks/mission_result.txt'
+[sequential_mission_node-2] [INFO] [1792499336.559363788] [sequential_mission_node]: ==== 顺序导航任务完成 ====

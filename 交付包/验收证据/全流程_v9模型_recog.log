@@ -1,0 +1,125 @@
+[INFO] [launch]: All log files can be found below /home/xxjj/.ros/log/2026-10-20-20-27-36-486497-LAPTOP-8MA8TPGS-5418
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [recognize_node-1]: process started with pid [5422]
+[recognize_node-1] [INFO] [1792499257.041232322] [ican_recognize_node]: [话术自检] 5 条话术均含裁判匹配关键词，通过
+[recognize_node-1] [INFO] [1792499258.542817219] [ican_recognize_node]: YOLO 模型加载完成: /home/xxjj/.ros/ican_recognize/best.pt
+[recognize_node-1] [INFO] [1792499258.580489768] [ican_recognize_node]: 识别节点就绪（yolo）: /camera/image -> /referee/detections | 门控=True 窗口=[0.60,0.90]m | 易混淆类阈值=无 | 调试图=关闭
+[recognize_node-1] [INFO] [1792499262.470020680] [ican_recognize_node]: [FPS] 已处理 30 帧，最近 30 帧实时 22.7 Hz
+[recognize_node-1] [INFO] [1792499263.765915481] [ican_recognize_node]: [FPS] 已处理 60 帧，最近 30 帧实时 23.0 Hz
+[recognize_node-1] [INFO] [1792499265.037596405] [ican_recognize_node]: [FPS] 已处理 90 帧，最近 30 帧实时 23.6 Hz
+[recognize_node-1] [INFO] [1792499266.212929209] [ican_recognize_node]: [FPS] 已处理 120 帧，最近 30 帧实时 25.3 Hz
+[recognize_node-1] [INFO] [1792499267.626300610] [ican_recognize_node]: [FPS] 已处理 150 帧，最近 30 帧实时 21.0 Hz
+[recognize_node-1] [INFO] [1792499268.899345075] [ican_recognize_node]: [FPS] 已处理 180 帧，最近 30 帧实时 23.6 Hz
+[recognize_node-1] [INFO] [1792499270.101756986] [ican_recognize_node]: [FPS] 已处理 210 帧，最近 30 帧实时 24.7 Hz
+[recognize_node-1] [INFO] [1792499271.438999001] [ican_recognize_node]: [FPS] 已处理 240 帧，最近 30 帧实时 22.3 Hz
+[recognize_node-1] [INFO] [1792499272.728684189] [ican_recognize_node]: [FPS] 已处理 270 帧，最近 30 帧实时 23.2 Hz
+[recognize_node-1] [INFO] [1792499273.972630889] [ican_recognize_node]: [FPS] 已处理 300 帧，最近 30 帧实时 24.6 Hz
+[recognize_node-1] [INFO] [1792499275.343345032] [ican_recognize_node]: [FPS] 已处理 330 帧，最近 30 帧实时 21.7 Hz
+[recognize_node-1] [INFO] [1792499276.586128883] [ican_recognize_node]: [FPS] 已处理 360 帧，最近 30 帧实时 24.0 Hz
+[recognize_node-1] [INFO] [1792499278.122741858] [ican_recognize_node]: [FPS] 已处理 390 帧，最近 30 帧实时 20.2 Hz
+[recognize_node-1] [INFO] [1792499279.372963574] [ican_recognize_node]: [FPS] 已处理 420 帧，最近 30 帧实时 23.8 Hz
+[recognize_node-1] [INFO] [1792499280.678862600] [ican_recognize_node]: [FPS] 已处理 450 帧，最近 30 帧实时 23.4 Hz
+[recognize_node-1] [INFO] [1792499281.926299798] [ican_recognize_node]: [FPS] 已处理 480 帧，最近 30 帧实时 24.0 Hz
+[recognize_node-1] [INFO] [1792499283.171654237] [ican_recognize_node]: [FPS] 已处理 510 帧，最近 30 帧实时 23.9 Hz
+[recognize_node-1] [INFO] [1792499283.858626055] [ican_recognize_node]: [门控] 进入识别窗口：点位 1，距离 0.90 m
+[recognize_node-1] [INFO] [1792499283.968671364] [ican_recognize_node]: [识别] landslide(投票 4/4, 本帧 landslide 0.83, 阈值 0.45, 点位 1 距离 0.88m): 已识别到滑坡塌方，落石阻断救援道路，开始清除障碍，打通救援通道。
+[recognize_node-1] [INFO] [1792499284.392083986] [ican_recognize_node]: [FPS] 已处理 540 帧，最近 30 帧实时 24.3 Hz
+[recognize_node-1] [INFO] [1792499285.940308955] [ican_recognize_node]: [FPS] 已处理 570 帧，最近 30 帧实时 19.1 Hz
+[recognize_node-1] [INFO] [1792499286.015855862] [ican_recognize_node]: [识别] landslide(投票 7/7, 本帧 landslide 0.76, 阈值 0.45, 点位 1 距离 0.82m): 已识别到滑坡塌方，落石阻断救援道路，开始清除障碍，打通救援通道。
+[recognize_node-1] [INFO] [1792499287.031736905] [ican_recognize_node]: [门控] 离开识别窗口（点位 1），本次已发布话术
+[recognize_node-1] [INFO] [1792499287.486200068] [ican_recognize_node]: [FPS] 已处理 600 帧，最近 30 帧实时 19.7 Hz
+[recognize_node-1] [INFO] [1792499288.933356565] [ican_recognize_node]: [FPS] 已处理 630 帧，最近 30 帧实时 21.1 Hz
+[recognize_node-1] [INFO] [1792499290.415494250] [ican_recognize_node]: [FPS] 已处理 660 帧，最近 30 帧实时 20.1 Hz
+[recognize_node-1] [INFO] [1792499291.630616744] [ican_recognize_node]: [门控] 进入识别窗口：点位 1，距离 0.61 m
+[recognize_node-1] [INFO] [1792499291.689491090] [ican_recognize_node]: [FPS] 已处理 690 帧，最近 30 帧实时 23.3 Hz
+[recognize_node-1] [INFO] [1792499291.798112218] [ican_recognize_node]: [识别] rescue_camp(投票 4/4, 本帧 rescue_camp 0.77, 阈值 0.45, 点位 1 距离 0.65m): 已识别到救援营地，前方存在障碍，开始清除障碍，建立救援通道。
+[recognize_node-1] [INFO] [1792499293.472434282] [ican_recognize_node]: [FPS] 已处理 720 帧，最近 30 帧实时 16.8 Hz
+[recognize_node-1] [INFO] [1792499293.818972508] [ican_recognize_node]: [识别] rescue_camp(投票 7/7, 本帧 rescue_camp 0.75, 阈值 0.45, 点位 1 距离 0.65m): 已识别到救援营地，前方存在障碍，开始清除障碍，建立救援通道。
+[recognize_node-1] [INFO] [1792499294.593588807] [ican_recognize_node]: [门控] 离开识别窗口（点位 1），本次已发布话术
+[recognize_node-1] [INFO] [1792499294.853102271] [ican_recognize_node]: [FPS] 已处理 750 帧，最近 30 帧实时 21.5 Hz
+[recognize_node-1] [INFO] [1792499296.136175474] [ican_recognize_node]: [FPS] 已处理 780 帧，最近 30 帧实时 23.2 Hz
+[recognize_node-1] [INFO] [1792499297.574192542] [ican_recognize_node]: [FPS] 已处理 810 帧，最近 30 帧实时 20.6 Hz
+[recognize_node-1] [INFO] [1792499299.155238771] [ican_recognize_node]: [FPS] 已处理 840 帧，最近 30 帧实时 18.8 Hz
+[recognize_node-1] [INFO] [1792499300.468632161] [ican_recognize_node]: [FPS] 已处理 870 帧，最近 30 帧实时 22.6 Hz
+[recognize_node-1] [INFO] [1792499301.632022537] [ican_recognize_node]: [FPS] 已处理 900 帧，最近 30 帧实时 25.7 Hz
+[recognize_node-1] [INFO] [1792499301.685448817] [ican_recognize_node]: [门控] 进入识别窗口：点位 2，距离 0.60 m
+[recognize_node-1] [INFO] [1792499301.833608851] [ican_recognize_node]: [识别] damaged_vehicle(投票 4/4, 本帧 damaged_vehicle 0.72, 阈值 0.45, 点位 2 距离 0.63m): 已识别到受损车辆，车辆阻碍救援通道，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499302.832703372] [ican_recognize_node]: [FPS] 已处理 930 帧，最近 30 帧实时 24.9 Hz
+[recognize_node-1] [INFO] [1792499303.846325799] [ican_recognize_node]: [识别] damaged_vehicle(投票 7/7, 本帧 damaged_vehicle 0.70, 阈值 0.45, 点位 1 距离 0.65m): 已识别到受损车辆，车辆阻碍救援通道，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499304.148048956] [ican_recognize_node]: [FPS] 已处理 960 帧，最近 30 帧实时 23.2 Hz
+[recognize_node-1] [INFO] [1792499305.523585678] [ican_recognize_node]: [FPS] 已处理 990 帧，最近 30 帧实时 21.6 Hz
+[recognize_node-1] [INFO] [1792499305.856787190] [ican_recognize_node]: [识别] damaged_vehicle(投票 7/7, 本帧 damaged_vehicle 0.74, 阈值 0.45, 点位 1 距离 0.66m): 已识别到受损车辆，车辆阻碍救援通道，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499306.676278291] [ican_recognize_node]: [门控] 离开识别窗口（点位 2），本次已发布话术
+[recognize_node-1] [INFO] [1792499306.892672407] [ican_recognize_node]: [FPS] 已处理 1020 帧，最近 30 帧实时 21.8 Hz
+[recognize_node-1] [INFO] [1792499308.239621289] [ican_recognize_node]: [FPS] 已处理 1050 帧，最近 30 帧实时 22.1 Hz
+[recognize_node-1] [INFO] [1792499309.605354450] [ican_recognize_node]: [FPS] 已处理 1080 帧，最近 30 帧实时 21.7 Hz
+[recognize_node-1] [INFO] [1792499310.764091287] [ican_recognize_node]: [FPS] 已处理 1110 帧，最近 30 帧实时 25.8 Hz
+[recognize_node-1] [INFO] [1792499312.161995226] [ican_recognize_node]: [FPS] 已处理 1140 帧，最近 30 帧实时 21.2 Hz
+[recognize_node-1] [INFO] [1792499313.202954890] [ican_recognize_node]: [FPS] 已处理 1170 帧，最近 30 帧实时 28.8 Hz
+[recognize_node-1] [INFO] [1792499314.385062590] [ican_recognize_node]: [FPS] 已处理 1200 帧，最近 30 帧实时 25.3 Hz
+[recognize_node-1] [INFO] [1792499314.732594100] [ican_recognize_node]: [门控] 进入识别窗口：点位 1，距离 0.60 m
+[recognize_node-1] [INFO] [1792499314.850008961] [ican_recognize_node]: [识别] trapped_people(投票 4/4, 本帧 trapped_people 0.77, 阈值 0.45, 点位 1 距离 0.60m): 已识别到被困人员，救援通道存在障碍，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499315.663513434] [ican_recognize_node]: [FPS] 已处理 1230 帧，最近 30 帧实时 23.2 Hz
+[recognize_node-1] [INFO] [1792499316.862569154] [ican_recognize_node]: [识别] trapped_people(投票 7/7, 本帧 trapped_people 0.68, 阈值 0.45, 点位 1 距离 0.63m): 已识别到被困人员，救援通道存在障碍，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499317.031881416] [ican_recognize_node]: [FPS] 已处理 1260 帧，最近 30 帧实时 21.8 Hz
+[recognize_node-1] [INFO] [1792499318.411652393] [ican_recognize_node]: [FPS] 已处理 1290 帧，最近 30 帧实时 21.5 Hz
+[recognize_node-1] [INFO] [1792499318.872873758] [ican_recognize_node]: [识别] trapped_people(投票 7/7, 本帧 trapped_people 0.82, 阈值 0.45, 点位 1 距离 0.63m): 已识别到被困人员，救援通道存在障碍，开始清除障碍，实施被困人员救援。
+[recognize_node-1] [INFO] [1792499319.257208590] [ican_recognize_node]: [门控] 离开识别窗口（点位 1），本次已发布话术
+[recognize_node-1] [INFO] [1792499319.710395367] [ican_recognize_node]: [FPS] 已处理 1320 帧，最近 30 帧实时 22.8 Hz
+[recognize_node-1] [INFO] [1792499320.854219357] [ican_recognize_node]: [FPS] 已处理 1350 帧，最近 30 帧实时 26.1 Hz
+[recognize_node-1] [INFO] [1792499322.128865094] [ican_recognize_node]: [FPS] 已处理 1380 帧，最近 30 帧实时 23.4 Hz
+[recognize_node-1] [INFO] [1792499323.401992106] [ican_recognize_node]: [FPS] 已处理 1410 帧，最近 30 帧实时 23.4 Hz
+[recognize_node-1] [INFO] [1792499323.488261788] [ican_recognize_node]: [门控] 进入识别窗口：点位 4，距离 0.60 m
+[recognize_node-1] [INFO] [1792499324.693148818] [ican_recognize_node]: [门控] 离开识别窗口（点位 4），本次未发布话术
+[recognize_node-1] [INFO] [1792499324.809067531] [ican_recognize_node]: [FPS] 已处理 1440 帧，最近 30 帧实时 21.1 Hz
+[recognize_node-1] [INFO] [1792499325.998664242] [ican_recognize_node]: [FPS] 已处理 1470 帧，最近 30 帧实时 25.2 Hz
+[recognize_node-1] [INFO] [1792499327.233973889] [ican_recognize_node]: [FPS] 已处理 1500 帧，最近 30 帧实时 23.9 Hz
+[recognize_node-1] [INFO] [1792499328.537105047] [ican_recognize_node]: [FPS] 已处理 1530 帧，最近 30 帧实时 23.1 Hz
+[recognize_node-1] [INFO] [1792499329.774348001] [ican_recognize_node]: [FPS] 已处理 1560 帧，最近 30 帧实时 24.1 Hz
+[recognize_node-1] [INFO] [1792499331.431741507] [ican_recognize_node]: [FPS] 已处理 1590 帧，最近 30 帧实时 18.3 Hz
+[recognize_node-1] [INFO] [1792499332.949498957] [ican_recognize_node]: [FPS] 已处理 1620 帧，最近 30 帧实时 19.6 Hz
+[recognize_node-1] [INFO] [1792499334.286230399] [ican_recognize_node]: [FPS] 已处理 1650 帧，最近 30 帧实时 22.2 Hz
+[recognize_node-1] [INFO] [1792499335.563415253] [ican_recognize_node]: [FPS] 已处理 1680 帧，最近 30 帧实时 23.3 Hz
+[recognize_node-1] [INFO] [1792499337.065116466] [ican_recognize_node]: [FPS] 已处理 1710 帧，最近 30 帧实时 21.8 Hz
+[recognize_node-1] [INFO] [1792499338.380886482] [ican_recognize_node]: [FPS] 已处理 1740 帧，最近 30 帧实时 22.7 Hz
+[recognize_node-1] [INFO] [1792499339.482053607] [ican_recognize_node]: [FPS] 已处理 1770 帧，最近 30 帧实时 27.3 Hz
+[recognize_node-1] [INFO] [1792499340.884662668] [ican_recognize_node]: [FPS] 已处理 1800 帧，最近 30 帧实时 21.8 Hz
+[recognize_node-1] [INFO] [1792499342.054504162] [ican_recognize_node]: [FPS] 已处理 1830 帧，最近 30 帧实时 25.5 Hz
+[recognize_node-1] [INFO] [1792499343.362428889] [ican_recognize_node]: [FPS] 已处理 1860 帧，最近 30 帧实时 22.7 Hz
+[recognize_node-1] [INFO] [1792499344.564378631] [ican_recognize_node]: [FPS] 已处理 1890 帧，最近 30 帧实时 24.8 Hz
+[recognize_node-1] [INFO] [1792499345.700528000] [ican_recognize_node]: [FPS] 已处理 1920 帧，最近 30 帧实时 26.2 Hz
+[recognize_node-1] [INFO] [1792499347.078249771] [ican_recognize_node]: [FPS] 已处理 1950 帧，最近 30 帧实时 22.2 Hz
+[recognize_node-1] [INFO] [1792499348.389168873] [ican_recognize_node]: [FPS] 已处理 1980 帧，最近 30 帧实时 23.5 Hz
+[recognize_node-1] [INFO] [1792499349.902036016] [ican_recognize_node]: [FPS] 已处理 2010 帧，最近 30 帧实时 19.6 Hz
+[recognize_node-1] [INFO] [1792499351.073837077] [ican_recognize_node]: [FPS] 已处理 2040 帧，最近 30 帧实时 25.4 Hz
+[recognize_node-1] [INFO] [1792499352.747250795] [ican_recognize_node]: [FPS] 已处理 2070 帧，最近 30 帧实时 17.7 Hz
+[recognize_node-1] [INFO] [1792499354.160924870] [ican_recognize_node]: [FPS] 已处理 2100 帧，最近 30 帧实时 21.1 Hz
+[recognize_node-1] [INFO] [1792499355.566065604] [ican_recognize_node]: [FPS] 已处理 2130 帧，最近 30 帧实时 21.2 Hz
+[recognize_node-1] [INFO] [1792499356.674516603] [ican_recognize_node]: [FPS] 已处理 2160 帧，最近 30 帧实时 27.3 Hz
+[recognize_node-1] [INFO] [1792499358.110935001] [ican_recognize_node]: [FPS] 已处理 2190 帧，最近 30 帧实时 20.7 Hz
+[recognize_node-1] [INFO] [1792499359.384633124] [ican_recognize_node]: [FPS] 已处理 2220 帧，最近 30 帧实时 23.3 Hz
+[recognize_node-1] [INFO] [1792499360.660067101] [ican_recognize_node]: [FPS] 已处理 2250 帧，最近 30 帧实时 23.3 Hz
+[recognize_node-1] [INFO] [1792499362.235076459] [ican_recognize_node]: [FPS] 已处理 2280 帧，最近 30 帧实时 18.8 Hz
+[recognize_node-1] [INFO] [1792499363.721271914] [ican_recognize_node]: [FPS] 已处理 2310 帧，最近 30 帧实时 20.0 Hz
+[recognize_node-1] [INFO] [1792499365.265150465] [ican_recognize_node]: [FPS] 已处理 2340 帧，最近 30 帧实时 19.2 Hz
+[recognize_node-1] [INFO] [1792499366.955310110] [ican_recognize_node]: [FPS] 已处理 2370 帧，最近 30 帧实时 17.6 Hz
+[recognize_node-1] [INFO] [1792499368.491279043] [ican_recognize_node]: [FPS] 已处理 2400 帧，最近 30 帧实时 19.2 Hz
+[recognize_node-1] [INFO] [1792499369.909699598] [ican_recognize_node]: [FPS] 已处理 2430 帧，最近 30 帧实时 21.0 Hz
+[recognize_node-1] [INFO] [1792499371.431525280] [ican_recognize_node]: [FPS] 已处理 2460 帧，最近 30 帧实时 20.4 Hz
+[recognize_node-1] [INFO] [1792499372.940120263] [ican_recognize_node]: [FPS] 已处理 2490 帧，最近 30 帧实时 19.6 Hz
+[recognize_node-1] [INFO] [1792499374.477061738] [ican_recognize_node]: [FPS] 已处理 2520 帧，最近 30 帧实时 19.3 Hz
+[recognize_node-1] [INFO] [1792499375.857002826] [ican_recognize_node]: [FPS] 已处理 2550 帧，最近 30 帧实时 21.6 Hz
+[recognize_node-1] [INFO] [1792499377.234625683] [ican_recognize_node]: [FPS] 已处理 2580 帧，最近 30 帧实时 21.6 Hz
+[recognize_node-1] [INFO] [1792499378.841677851] [ican_recognize_node]: [FPS] 已处理 2610 帧，最近 30 帧实时 19.2 Hz
+[recognize_node-1] [INFO] [1792499380.116335061] [ican_recognize_node]: [FPS] 已处理 2640 帧，最近 30 帧实时 23.6 Hz
+[recognize_node-1] [INFO] [1792499381.284887929] [ican_recognize_node]: [FPS] 已处理 2670 帧，最近 30 帧实时 25.6 Hz
+[recognize_node-1] [INFO] [1792499382.494846783] [ican_recognize_node]: [FPS] 已处理 2700 帧，最近 30 帧实时 25.5 Hz
+[recognize_node-1] [INFO] [1792499383.710616021] [ican_recognize_node]: [FPS] 已处理 2730 帧，最近 30 帧实时 24.6 Hz
+[recognize_node-1] [INFO] [1792499384.977696838] [ican_recognize_node]: [FPS] 已处理 2760 帧，最近 30 帧实时 23.5 Hz
+[recognize_node-1] [INFO] [1792499386.358375349] [ican_recognize_node]: [FPS] 已处理 2790 帧，最近 30 帧实时 21.5 Hz
+[recognize_node-1] [INFO] [1792499387.771648004] [ican_recognize_node]: [FPS] 已处理 2820 帧，最近 30 帧实时 21.1 Hz
+[recognize_node-1] [INFO] [1792499389.157964313] [ican_recognize_node]: [FPS] 已处理 2850 帧，最近 30 帧实时 22.0 Hz
+[recognize_node-1] [INFO] [1792499390.395611886] [ican_recognize_node]: [FPS] 已处理 2880 帧，最近 30 帧实时 24.7 Hz
+[recognize_node-1] [INFO] [1792499391.539078430] [ican_recognize_node]: [FPS] 已处理 2910 帧，最近 30 帧实时 26.2 Hz
+[recognize_node-1] [INFO] [1792499392.826694928] [ican_recognize_node]: [FPS] 已处理 2940 帧，最近 30 帧实时 23.1 Hz
+[recognize_node-1] [INFO] [1792499394.140675283] [ican_recognize_node]: [FPS] 已处理 2970 帧，最近 30 帧实时 22.7 Hz
