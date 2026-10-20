@@ -171,6 +171,7 @@ def main():
                     help="参与验收的点位，逗号分隔。默认 1,2,3,4 —— 判分细则 1.1 明确任务点为 "
                          "1->2->3->4 共 4 个，0 号点仅作视觉贴图不参与导航"
                          "（randomize_ground_textures 日志同样确认）；要多算 0 号点用 --points 0,1,2,3,4")
+    ap.add_argument("--seed", default=None, help="仅用于写进报告标题（随机化 seed）")
     args = ap.parse_args()
 
     try:
