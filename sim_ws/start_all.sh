@@ -8,6 +8,7 @@
 #   bash start_all.sh            # GUI 模式（相机可用，识别需要）
 #   bash start_all.sh --no-gui   # 无头模式（省资源，但相机可能不出图）
 #   bash start_all.sh --no-recog # 不启动识别节点（只验导航链路）
+#   bash start_all.sh --no-mission  # 不启动顺序任务（跑验收脚本时用，避免抢控制权）
 #
 # 查看日志：
 #   tail -f logs/sim.log logs/nav.log logs/recog.log logs/mission.log
@@ -22,10 +23,12 @@ mkdir -p "$LOG"
 
 GUI=true
 START_RECOG=1
+START_MISSION=1
 for arg in "$@"; do
   case "$arg" in
-    --no-gui)   GUI=false ;;
-    --no-recog) START_RECOG=0 ;;
+    --no-gui)     GUI=false ;;
+    --no-recog)   START_RECOG=0 ;;
+    --no-mission) START_MISSION=0 ;;
     -h|--help)  sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "未知参数: $arg" >&2; exit 2 ;;
   esac
@@ -121,16 +124,22 @@ if [ "$START_RECOG" -eq 1 ]; then
   fi
 fi
 
-echo
-echo "=========== 5. 启动顺序任务 ==========="
-ros2 launch ican_nav_tasks nav_tasks.launch.py > "$LOG/mission.log" 2>&1 &
-sleep 5
-if grep -q "顺序导航节点就绪" "$LOG/mission.log"; then
-  echo "  ✅ 任务节点就绪（约 20s 后开始导航）"
+if [ "$START_MISSION" -eq 1 ]; then
+  echo
+  echo "=========== 5. 启动顺序任务 ==========="
+  ros2 launch ican_nav_tasks nav_tasks.launch.py > "$LOG/mission.log" 2>&1 &
+  sleep 5
+  if grep -q "顺序导航节点就绪" "$LOG/mission.log"; then
+    echo "  ✅ 任务节点就绪（约 20s 后开始导航）"
+  else
+    echo "  ❌ 任务节点未就绪，查看 $LOG/mission.log"
+    tail -20 "$LOG/mission.log"
+    exit 1
+  fi
 else
-  echo "  ❌ 任务节点未就绪，查看 $LOG/mission.log"
-  tail -20 "$LOG/mission.log"
-  exit 1
+  echo
+  echo "=========== 5. 跳过顺序任务（--no-mission）==========="
+  echo "  ℹ️ 未启动 ican_nav_tasks：机器人交由外部（如验收脚本）驱动"
 fi
 
 echo
