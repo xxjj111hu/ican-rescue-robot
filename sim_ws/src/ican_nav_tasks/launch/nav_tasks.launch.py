@@ -18,6 +18,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -35,11 +36,20 @@ def generate_launch_description():
                               description="停在识别位等待话术的最长时间"),
     ]
 
-    # 只覆盖这几个；其余（含 waypoints / standoff_waypoints）以参数文件为准
+    # 只覆盖这几个；其余（含 waypoints / standoff_waypoints）以参数文件为准。
+    # 用 ParameterValue 强制类型：否则命令行传 start_delay_sec:=5（无小数点）会被推断
+    # 成 INTEGER，而节点声明的是 DOUBLE，rclpy 直接抛
+    # InvalidParameterTypeException 让节点启动即崩。
     mission_overrides = {
-        "start_delay_sec": LaunchConfiguration("start_delay_sec"),
-        "enable_shooting": LaunchConfiguration("enable_shooting"),
-        "recognize_wait_sec": LaunchConfiguration("recognize_wait_sec"),
+        "start_delay_sec": ParameterValue(
+            LaunchConfiguration("start_delay_sec"), value_type=float
+        ),
+        "enable_shooting": ParameterValue(
+            LaunchConfiguration("enable_shooting"), value_type=bool
+        ),
+        "recognize_wait_sec": ParameterValue(
+            LaunchConfiguration("recognize_wait_sec"), value_type=float
+        ),
     }
 
     return LaunchDescription(
