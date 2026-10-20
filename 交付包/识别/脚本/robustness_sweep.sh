@@ -43,7 +43,7 @@ MODEL="$REPO/交付包/识别/模型/best.pt"
 COPY_MODEL=1
 DIST=0.8
 PER_POINT=10
-POINTS="0,1,2,3,4"
+POINTS="1,2,3,4"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -132,6 +132,12 @@ run_one() {  # $1 = seed（基线传 default）
     ( cd "$(dirname "$RANDOMIZE")" && bash "$RANDOMIZE" --seed "$seed" ) \
       > "/tmp/rand_${seed}.log" 2>&1 || {
         echo "❌ 随机化失败，见 /tmp/rand_${seed}.log" >&2
+        if grep -q "setup-permissions" "/tmp/rand_${seed}.log" 2>/dev/null; then
+          echo "" >&2
+          echo "   ⚠️ 首次运行需要先给仿真资源授权（一次即可）：" >&2
+          echo "      bash $(dirname "$RANDOMIZE")/randomize_ground_textures.sh --setup-permissions" >&2
+          echo "   之后再重跑本脚本。" >&2
+        fi
         tail -20 "/tmp/rand_${seed}.log" >&2
         return 1
       }
