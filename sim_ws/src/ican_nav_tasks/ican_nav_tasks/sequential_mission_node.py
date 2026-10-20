@@ -403,24 +403,24 @@ class SequentialMissionNode(Node):
         if self.state == "WAITING":
             if elapsed >= self.start_delay_sec:
                 if self.amcl is None:
-                    # 兜底：AMCL 长时间不发位姿时，若 /odom 已有数据就用真值位姿顶上。
-                    # 否则会死锁——任务等 AMCL、AMCL 只在机器人移动时才更新位姿，
-                    # 而机器人又因为任务没启动而不动。
-                    if (elapsed >= self.start_delay_sec + self.amcl_fallback_sec):
-                        if self.odom is not None:
-                            self.get_logger().warn(
-                                f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
-                                f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
-                            )
-                            self.amcl = dict(self.odom)
-                        else:
-                            # 连 /odom 都没有也不能卡死：Nav2 自己会用 TF 完成定位，
-                            # 本节点的失败只影响"到点误差统计"和微调，不影响能否导航。
-                            self.get_logger().warn(
-                                f"AMCL 与 /odom 均未收到（已等 "
-                                f"{self.start_delay_sec + self.amcl_fallback_sec:.0f}s），"
-                                f"仍继续导航（定位由 Nav2/TF 自行负责）。"
-                            )
+                    # 兜底：AMCL 长时间不发位姿时依次退让：
+                    #   ① 有 /odom 就用真值位姿；② 连 /odom 都没有也继续导航
+                    #      （Nav2 靠 TF 自己定位，本节点的位姿只用于误差统计与微调）。
+                    if elapsed >= self.start_delay_sec + self.amcl_fallback_sec:
+                        if not getattr(self, "_fallback_logged", False):
+                            self._fallback_logged = True
+                            if self.odom is not None:
+                                self.get_logger().warn(
+                                    f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
+                                    f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
+                                )
+                                self.amcl = dict(self.odom)
+                            else:
+                                self.get_logger().warn(
+                                    f"AMCL 与 /odom 均未收到（已等 "
+                                    f"{self.start_delay_sec + self.amcl_fallback_sec:.0f}s），"
+                                    f"仍继续导航（定位由 Nav2/TF 自行负责）。"
+                                )
                     else:
                         # now 是 time.monotonic() 的 float 秒，按 5 秒节流打日志
                         slot = int(now // 5)
@@ -428,6 +428,10 @@ class SequentialMissionNode(Node):
                             self._last_wait_log = slot
                             self.get_logger().info("等待 AMCL 定位就绪后再开始导航。")
                         return
+                # 重试节流：Nav2 未就绪时不要每 0.2s 刷一次日志
+                if now < getattr(self, "_next_retry_t", 0.0):
+                    return
+                self._next_retry_t = now + 2.0
                 self.begin_next()
             return
 

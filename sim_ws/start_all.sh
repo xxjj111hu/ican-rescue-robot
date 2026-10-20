@@ -74,7 +74,22 @@ ros2 launch ican_example_navigation navigation.launch.py rviz:=false \
   > "$LOG/nav.log" 2>&1 &
 echo "等待 Nav2 激活（约 20s）..."
 sleep 20
-wait_topic /amcl_pose 40 "AMCL 位姿" || { echo "AMCL 未发布位姿，查看 $LOG/nav.log"; exit 1; }
+# /amcl_pose 不作致命检查：nav2_amcl 在机器人静止时可能不更新、不发布位姿，
+# 而任务节点自身有 /odom 与"无位姿也继续"的兜底。这里只提示。
+if wait_topic /amcl_pose 30 "AMCL 位姿"; then
+  :
+else
+  echo "  ⚠️ /amcl_pose 暂无数据（静止时 AMCL 可能不发布，任务节点会自动兜底）"
+fi
+
+echo "  检查 Nav2 action ..."
+if ros2 action list 2>/dev/null | grep -q "navigate_to_pose"; then
+  echo "  ✅ /navigate_to_pose 可用"
+else
+  echo "  ❌ 未见 /navigate_to_pose，任务节点会反复报「Nav2 action server 未就绪」"
+  tail -20 "$LOG/nav.log"
+  exit 1
+fi
 
 echo "  检查 map -> base_footprint 变换 ..."
 # 注意：tf2_echo 是长驻命令，永远不自己退出，timeout 杀它必然返回非 0。
