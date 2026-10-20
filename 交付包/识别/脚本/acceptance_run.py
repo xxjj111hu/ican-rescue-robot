@@ -82,6 +82,23 @@ GROUND = {0: (1.115218, -1.356470), 1: (0.030951, -1.359743), 2: (0.027137, -2.7
           3: (1.120240, -1.913890), 4: (1.120112, -0.784766)}
 APPROACH = {0: (1.0, 0.0), 1: (0.0, -1.0), 2: (0.0, -1.0), 3: (1.0, 0.0), 4: (1.0, 0.0)}
 
+# 实测标定的停车位（0.70 m，已用地图占据栅格校验 0.25 m 内无占据），
+# 与 ican_nav_tasks/config/waypoints.yaml 的 standoff_waypoints、以及
+# 交付包/识别/脚本/goto_pose.py 的 STANDOFF_POSES 保持一致。
+#
+# 为什么必须用这张表而不是「贴图坐标 - 接近方向 × dist」：
+# 识别节点的门控用「离哪个地面贴图最近」来算距离，而全部停车位都离
+# 点位 1 的贴图最近。几何计算出来的停车位会让最近距离落到 0.60 m 门控
+# 下限之外（点位 0 只有 0.284 m、点位 2 只有 0.540 m），门控永远不打开，
+# 表现就是这两个点位一条话术都采集不到。
+MEASURED = {
+    0: (0.415, -1.356, 0.0),
+    1: (0.031, -0.660, -1.5708),
+    2: (0.027, -2.000, -1.5708),
+    3: (0.420, -1.914, 0.0),
+    4: (0.420, -0.785, 0.0),
+}
+
 DEFAULT_SHARE = Path("/opt/ican_shoot_sim/share/ican_land_sim")
 ASSIGN_DEFAULT = DEFAULT_SHARE / "materials" / "shooting_texture_assignment.json"
 MATERIAL_DEFAULT = DEFAULT_SHARE / "materials" / "scripts" / "ican_land.material"
@@ -138,6 +155,9 @@ def load_truth(assign_path: Path | None, material_path: Path) -> tuple[dict[int,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dist", type=float, default=0.8)
+    ap.add_argument("--standoff", choices=["measured", "computed"], default="measured",
+                    help="measured=用实测标定停车位（默认，推荐）；"
+                         "computed=贴图坐标-接近方向×dist（会落入门控盲区，仅用于对比）")
     ap.add_argument("--per-point", type=int, default=10)
     ap.add_argument("--timeout", type=float, default=40.0, help="单点采集超时（秒）")
     ap.add_argument("--assign", default=None, help="真值 json 路径（可省略）")
@@ -184,10 +204,13 @@ def main():
 
     rows, ok, total = [], 0, 0
     for pid in range(5):
-        tx, ty = GROUND[pid]
-        ux, uy = APPROACH[pid]
-        yaw = math.atan2(uy, ux)
-        sx, sy = tx - ux * args.dist, ty - uy * args.dist
+        if args.standoff == "measured":
+            sx, sy, yaw = MEASURED[pid]
+        else:
+            tx, ty = GROUND[pid]
+            ux, uy = APPROACH[pid]
+            yaw = math.atan2(uy, ux)
+            sx, sy = tx - ux * args.dist, ty - uy * args.dist
         try:
             r = subprocess.run(
                 [sys.executable, str(goto), "--x", f"{sx:.4f}",
