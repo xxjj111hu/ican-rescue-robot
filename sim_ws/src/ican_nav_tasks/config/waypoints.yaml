@@ -66,6 +66,15 @@
     nudge_speed: 0.1
     nudge_max_sec: 12.0
 
+    # ---- 停滞检测（对应官网比赛流程「机器人超过 30s 状态未变化，裁判可停赛」）----
+    # 导航中剩余距离在 stall_check_sec 内改善不足 stall_improve_m 即判定卡住：
+    # 取消目标 → 低速微调脱困 recover_sec 秒 → 重发目标。
+    # 同一目标最多自救 max_stall_recover 次，仍失败则按到达处理继续（优先保全程不中断）。
+    stall_check_sec: 15.0
+    stall_improve_m: 0.05
+    recover_sec: 6.0
+    max_stall_recover: 3
+
     # 射击：瞄准算法（D-01）尚未接入，默认关闭，只发 shoot_N 声明不实弹
     # 说明：细则规定"命中第一发后该点不再计分"，胡乱射击可能锁死错误成绩
     enable_shooting: false

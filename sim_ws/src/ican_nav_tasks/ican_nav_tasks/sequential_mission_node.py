@@ -66,6 +66,13 @@ class SequentialMissionNode(Node):
         # 超过 start_delay + 本值仍收不到 AMCL 位姿，就用 /odom 真值顶上（防死锁）
         self.declare_parameter("amcl_fallback_sec", 20.0)
         self.declare_parameter("nav_timeout_sec", 120.0)
+        # ---- 停滞检测（对应官网比赛流程「机器人超过 30s 状态未发生变化，裁判可停赛」）----
+        # 导航中若剩余距离在规定时间内没有有效改善，就判定卡住并主动自救，
+        # 避免一直等到 nav_timeout_sec（120s）——那远超裁判的 30s 容忍。
+        self.declare_parameter("stall_check_sec", 15.0)
+        self.declare_parameter("stall_improve_m", 0.05)
+        self.declare_parameter("recover_sec", 6.0)
+        self.declare_parameter("max_stall_recover", 3)
         self.declare_parameter("goal_retry_sec", 2.0)
         # 进入位（任务点本身，贴图中心）：[x, y, yaw] * 4
         self.declare_parameter(
@@ -204,6 +211,15 @@ class SequentialMissionNode(Node):
         self.boot = time.monotonic()
         self.start_delay_sec = float(self.get_parameter("start_delay_sec").value)
         self.nav_timeout_sec = float(self.get_parameter("nav_timeout_sec").value)
+        self.stall_check_sec = float(self.get_parameter("stall_check_sec").value)
+        self.stall_improve_m = float(self.get_parameter("stall_improve_m").value)
+        self.recover_sec = float(self.get_parameter("recover_sec").value)
+        self.max_stall_recover = int(self.get_parameter("max_stall_recover").value)
+        # 停滞检测状态：记录"见过的最好剩余距离"与"该记录的时间"
+        self._stall_best = None
+        self._stall_t = 0.0
+        self.recover_start = None
+        self._recover_count = 0
         self.wp_index = 0
         self.nav_goal_handle = None
         self.nav_result_future = None
@@ -385,6 +401,9 @@ class SequentialMissionNode(Node):
             return
         self.get_logger().info("Nav2 已接受导航目标。")
         self.nav_result_future = self.nav_goal_handle.get_result_async()
+        # 新目标开始：重置停滞检测（脱困计数在换点时重置，同一目标内累计）
+        self._stall_best = None
+        self._stall_t = time.monotonic()
 
     def resend_current_goal(self):
         if self.retry_timer is not None:
@@ -447,6 +466,32 @@ class SequentialMissionNode(Node):
                         f"({self.amcl['x']:.3f},{self.amcl['y']:.3f})"
                     )
                 self.last_progress = now
+            # ---- 停滞检测 ----
+            # 官网比赛流程：机器人超过 30s 状态未变化，裁判可停赛。
+            # 因此不能只靠 nav_timeout_sec（120s），必须在 15s 级就主动自救，
+            # 否则会一直干等到被裁判叫停。
+            if self.current_target is not None and self.amcl is not None:
+                _d = math.hypot(
+                    self.current_target[0] - self.amcl["x"],
+                    self.current_target[1] - self.amcl["y"],
+                )
+                if (self._stall_best is None
+                        or _d < self._stall_best - self.stall_improve_m):
+                    self._stall_best = _d
+                    self._stall_t = now
+                elif now - self._stall_t >= self.stall_check_sec:
+                    self.get_logger().warn(
+                        f"检测到导航停滞：{self.stall_check_sec:.0f}s 内剩余距离"
+                        f"未改善（当前 {_d:.3f} m，最好 {self._stall_best:.3f} m）"
+                        f" @ {self.current_target[3]} → 取消目标并尝试脱困"
+                    )
+                    self._recover_count += 1
+                    self.publish_event(f"stall:{self.current_target[3]}")
+                    self.cancel_nav_goal()
+                    self.stop_robot()
+                    self.recover_start = now
+                    self.state = "RECOVER"
+                    return
             if (
                 self.nav_result_future is not None
                 and self.nav_result_future.done()
@@ -471,6 +516,10 @@ class SequentialMissionNode(Node):
                     self.nav_goal_handle.cancel_goal_async()
                 self.on_arrived()
                 return
+
+        if self.state == "RECOVER":
+            self.do_recover(now)
+            return
 
         if self.state == "NUDGE":
             self.do_nudge(now, self.xy_tol, self.after_arrived)
@@ -505,6 +554,8 @@ class SequentialMissionNode(Node):
             return
 
     def begin_next(self):
+        # 换点：重置脱困计数，避免上一个点的自救次数拖累后续点位
+        self._recover_count = 0
         if self.wp_index < len(self.waypoints):
             self.go_to_standoff()
         else:
@@ -599,6 +650,58 @@ class SequentialMissionNode(Node):
             self.state = "PARK_NUDGE"
         else:
             self.finish_mission()
+
+    def cancel_nav_goal(self):
+        """异步取消当前导航目标（取消失败不影响后续流程）。"""
+        handle = self.nav_goal_handle
+        self.nav_goal_handle = None
+        self.nav_result_future = None
+        if handle is not None:
+            try:
+                handle.cancel_goal_async()
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().warn(f"取消导航目标失败: {exc}")
+
+    def do_recover(self, now):
+        """停滞自救：朝目标方向做短时微调（麦轮可横移，对脱困有效），再重发目标。
+
+        超时或次数超限后强制继续，保证全程不中断（判分要求"不中断"优先于"完美到达"）。
+        """
+        if self.current_target is None:
+            self.stop_robot()
+            self.get_logger().error("脱困时没有当前目标，状态机无法继续。")
+            return
+        label = self.current_target[3]
+        timed_out = (now - self.recover_start) > self.recover_sec
+
+        if timed_out or self.amcl is None:
+            self.stop_robot()
+            x, y, yaw, _ = self.current_target
+            if self._recover_count >= self.max_stall_recover:
+                self.get_logger().error(
+                    f"目标 {label} 连续 {self._recover_count} 次脱困失败，"
+                    f"按到达处理继续（优先保证全程不中断）。"
+                )
+                self.on_arrived()
+                return
+            self.get_logger().warn(
+                f"脱困结束（第 {self._recover_count} 次）→ 重新发送导航目标 {label}"
+            )
+            self._stall_best = None
+            self._stall_t = now
+            self.send_goal(x, y, yaw, label)
+            return
+
+        # 朝目标方向低速微调（与到达微调用同一套麦轮解算）
+        ex = self.current_target[0] - self.amcl["x"]
+        ey = self.current_target[1] - self.amcl["y"]
+        yaw = self.amcl["yaw"]
+        rx = ex * math.cos(yaw) + ey * math.sin(yaw)
+        ry = -ex * math.sin(yaw) + ey * math.cos(yaw)
+        tw = Twist()
+        tw.linear.x = clamp(rx * 0.6, -self.nudge_speed, self.nudge_speed)
+        tw.linear.y = clamp(ry * 0.6, -self.nudge_speed, self.nudge_speed)
+        self.cmd_pub.publish(tw)
 
     def do_nudge(self, now, tol, on_done):
         if self.amcl is None or now - self.nudge_start > self.nudge_max_sec:
