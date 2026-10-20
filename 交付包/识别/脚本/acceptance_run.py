@@ -269,7 +269,14 @@ def main():
     collected = sum(got for _, _, _, got, _ in rows)
 
     title = "验收口径实测（{} 点位 × {} 次，听 /referee/detections）".format(len(points), args.per_point)
-    lines = ["=" * 60, title, f"停车距离: {args.dist} m"]
+    lines = ["=" * 60, title]
+    if args.standoff == "measured":
+        used = [round(math.hypot(GROUND[p][0] - MEASURED[p][0],
+                                 GROUND[p][1] - MEASURED[p][1]), 2) for p in points]
+        lines.append(f"停车位: 实测标定表（贴图中心前方 {min(used):.2f}~{max(used):.2f} m，"
+                     f"地图占据栅格已验证）")
+    else:
+        lines.append(f"停车位: 几何计算（贴图坐标 - 接近方向 × {args.dist} m）")
     if args.seed:
         lines.append(f"随机化 seed: {args.seed}")
     lines.append(f"真值来源: {truth_src}")
