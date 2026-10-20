@@ -167,13 +167,26 @@ def main():
                     help="goto_pose.py 路径")
     ap.add_argument("--out", default=None,
                     help="结果文件；默认 交付包/识别/报告/acceptance_run.txt")
-    ap.add_argument("--seed", default=None, help="仅用于写进报告标题")
+    ap.add_argument("--points", default="0,1,2,3,4",
+                    help="参与验收的点位，逗号分隔。默认 0,1,2,3,4（5 点位口径）；"
+                         "若任务书只有 4 个任务点，用 --points 1,2,3,4")
     args = ap.parse_args()
+
+    try:
+        points = [int(x) for x in args.points.split(",") if x.strip() != ""]
+    except ValueError:
+        raise SystemExit(f"--points 格式错误: {args.points}")
+    bad = [p for p in points if p not in range(5)]
+    if bad:
+        raise SystemExit(f"--points 含非法点位 {bad}（只支持 0~4）")
+    if not points:
+        raise SystemExit("--points 不能为空")
+    points = sorted(set(points))
 
     expect, truth_src = load_truth(
         Path(args.assign) if args.assign else None, Path(args.material)
     )
-    missing = [p for p in range(5) if p not in expect]
+    missing = [p for p in points if p not in expect]
     if missing:
         raise SystemExit(f"真值缺少点位 {missing}；来源 {truth_src}")
 
@@ -203,7 +216,7 @@ def main():
     node.create_subscription(String, "/referee/detections", lambda m: q.append(m.data), 10)
 
     rows, ok, total = [], 0, 0
-    for pid in range(5):
+    for pid in points:
         if args.standoff == "measured":
             sx, sy, yaw = MEASURED[pid]
         else:
@@ -248,12 +261,12 @@ def main():
 
     # 统计口径：分母必须是"应采次数" 5 × per_point。
     # 否则某个点位一条都没采到（got=0）时会被直接排除，把总体拉高成假通过。
-    expected_total = 5 * args.per_point
+    expected_total = len(points) * args.per_point
     overall = ok / max(expected_total, 1) * 100
     short = [(pid, got) for pid, _, _, got, _ in rows if got < args.per_point]
     collected = sum(got for _, _, _, got, _ in rows)
 
-    title = "验收口径实测（5 点位 × {} 次，听 /referee/detections）".format(args.per_point)
+    title = "验收口径实测（{} 点位 × {} 次，听 /referee/detections）".format(len(points), args.per_point)
     lines = ["=" * 60, title, f"停车距离: {args.dist} m"]
     if args.seed:
         lines.append(f"随机化 seed: {args.seed}")

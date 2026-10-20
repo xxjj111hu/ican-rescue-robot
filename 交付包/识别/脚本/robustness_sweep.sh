@@ -43,6 +43,7 @@ MODEL="$REPO/交付包/识别/模型/best.pt"
 COPY_MODEL=1
 DIST=0.8
 PER_POINT=10
+POINTS="0,1,2,3,4"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -53,6 +54,7 @@ while [ $# -gt 0 ]; do
     --no-model-copy)  COPY_MODEL=0; shift ;;
     --dist)           DIST="$2"; shift 2 ;;
     --per-point)      PER_POINT="$2"; shift 2 ;;
+    --points)         POINTS="$2"; shift 2 ;;
     -h|--help)        sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
@@ -68,6 +70,7 @@ echo " 鲁棒性验收（B-05 口径：5 点位 × ${PER_POINT} 次，>=90% 通�
 echo " 仓库: $REPO"
 echo " 模型: $MODEL"
 echo " 模式: $([ "$SKIP_RAND" -eq 1 ] && echo '基线（不换贴图）' || echo "多 seed: $SEEDS")"
+echo " 点位: $POINTS"
 echo " 记录目录: $REPORT_DIR"
 echo "============================================================"
 echo
@@ -159,7 +162,7 @@ run_one() {  # $1 = seed（基线传 default）
     set -u
     cd "$WS"
     ICAN_WS="$WS" python3 "$SCRIPT_DIR/acceptance_run.py" \
-      --dist "$DIST" --per-point "$PER_POINT" --seed "$seed" --out "$out"
+      --dist "$DIST" --per-point "$PER_POINT" --points "$POINTS" --seed "$seed" --out "$out"
   )
   local rc=$?
   set -e
