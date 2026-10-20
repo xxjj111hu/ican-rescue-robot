@@ -85,12 +85,27 @@ else
   echo "  ⚠️ /amcl_pose 暂无数据（静止时 AMCL 可能不发布，任务节点会自动兜底）"
 fi
 
-echo "  检查 Nav2 action ..."
-if ros2 action list 2>/dev/null | grep -q "navigate_to_pose"; then
-  echo "  ✅ /navigate_to_pose 可用"
+echo "  等待 Nav2 action /navigate_to_pose ..."
+# 用轮询而不是"固定 sleep 后再查一次"：
+# Nav2 的 bt_navigator 激活耗时受 CPU 负载影响，实测在 18~40s 之间波动，
+# 之前写死 20s 会在负载高时误判"Nav2 起不来"，把好环境当成坏环境退出。
+nav_ok=0
+waited=0
+while [ "$waited" -lt 60 ]; do
+  if ros2 action list 2>/dev/null | grep -q "navigate_to_pose"; then
+    nav_ok=1
+    break
+  fi
+  sleep 3
+  waited=$((waited + 3))
+done
+if [ "$nav_ok" -eq 1 ]; then
+  echo "  ✅ /navigate_to_pose 可用（等待 ${waited}s）"
 else
-  echo "  ❌ 未见 /navigate_to_pose，任务节点会反复报「Nav2 action server 未就绪」"
-  tail -20 "$LOG/nav.log"
+  echo "  ❌ 等了 ${waited}s 仍未见 /navigate_to_pose"
+  echo "     常见原因：Nav2 某个 lifecycle 节点激活失败、参数错误、CPU/内存不足"
+  echo "     排查：ros2 lifecycle get /bt_navigator ; ros2 node list | grep nav"
+  tail -30 "$LOG/nav.log"
   exit 1
 fi
 
