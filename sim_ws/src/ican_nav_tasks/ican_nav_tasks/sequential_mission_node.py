@@ -23,6 +23,7 @@
 import json
 import math
 import os
+import threading
 import time
 
 from action_msgs.msg import GoalStatus
@@ -31,6 +32,7 @@ from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -214,13 +216,46 @@ class SequentialMissionNode(Node):
         self.last_progress = None  # 进度日志时间戳
 
         # 5 Hz state machine tick (was 10 Hz) to reduce CPU on the VM
-        # 墙钟定时器：不受 /clock 影响，保证状态机一定在推进
-        self.timer = self.create_wall_timer(0.2, self.tick)
+        # 状态机驱动：优先用墙钟定时的 create_timer（clock=SYSTEM_TIME），
+        # 若该 rclpy 版本不支持 clock 参数，则退回独立线程驱动 tick。
+        # 目的：**绝不让状态机的推进依赖仿真时钟 /clock**。
+        # 注意 rclpy 没有 create_wall_timer（那是 rclcpp 的 API）。
+        self._wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
+        self.timer = None
+        self._timer_thread = None
+        try:
+            self.timer = self.create_timer(0.2, self.tick, clock=self._wall_clock)
+            self._timer_mode = "墙钟定时器"
+        except TypeError:
+            self._start_tick_thread()
+
         self.get_logger().info(
             f"顺序导航节点就绪：{len(self.waypoints)} 个任务点，"
             f"返航={'是' if self.return_to_base else '否'}。"
             f"任务点坐标={self.waypoints}"
         )
+        self.get_logger().info(
+            f"[状态机] 驱动方式={self._timer_mode}；"
+            f"识别位={self.standoffs if self.standoffs else '未配置（单段导航）'}"
+        )
+
+    def _start_tick_thread(self):
+        """兜底：用独立守护线程按固定间隔调用 tick，彻底避开 ROS 时钟。"""
+        self._timer_mode = "独立线程（rclpy 不支持 clock 参数）"
+
+        def _loop():
+            while rclpy.ok():
+                try:
+                    self.tick()
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        self.get_logger().error(f"[状态机] tick 异常: {exc}")
+                    except Exception:  # noqa: BLE001
+                        pass
+                time.sleep(0.2)
+
+        self._timer_thread = threading.Thread(target=_loop, daemon=True)
+        self._timer_thread.start()
 
     # ---------------- 订阅回调 ----------------
     def on_amcl(self, msg):
@@ -331,7 +366,9 @@ class SequentialMissionNode(Node):
                 self.state = "NAVIGATING"
                 self.nav_start = time.monotonic()
                 delay = float(self.get_parameter("goal_retry_sec").value)
-                self.retry_timer = self.create_wall_timer(delay, self.resend_current_goal)
+                self.retry_timer = self.create_timer(
+                    delay, self.resend_current_goal, clock=self._wall_clock
+                )
                 return
             self.get_logger().error(
                 f"Nav2 多次拒绝导航目标({self.current_target[3]})，按到达处理继续。"
