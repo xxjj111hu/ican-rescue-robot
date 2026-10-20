@@ -32,30 +32,47 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+# 可能承载 ican_recognize 包的路径形态：
+#   标准 colcon 工作空间:  <ws>/src/ican_recognize
+#   本仓库布局:            <repo>/sim_ws/src/ican_recognize
+_PKG_LAYOUTS = (("src", "ican_recognize"), ("sim_ws", "src", "ican_recognize"))
 
-def find_ws() -> Path | None:
-    """向上查找含 src/ican_recognize 的工作空间根目录。"""
-    for base in [SCRIPT_DIR, *SCRIPT_DIR.parents]:
-        if (base / "src" / "ican_recognize").is_dir():
-            return base
+
+def find_pkg_dir() -> Path | None:
+    """向上逐级查找 ican_recognize 包的父目录（即 sys.path 需要的那一层）。
+
+    注意：脚本位于 <repo>/交付包/识别/脚本/，
+    所以仓库根是 parents[2]，不能只写 parent.parent。
+    另外支持环境变量 ICAN_WS 直接指定工作空间。
+    """
+    bases = [SCRIPT_DIR, *SCRIPT_DIR.parents]
+    env = os.environ.get("ICAN_WS")
+    if env:
+        bases.append(Path(env))
+    for base in bases:
+        for rel in _PKG_LAYOUTS:
+            cand = base.joinpath(*rel)
+            if (cand / "ican_recognize" / "__init__.py").is_file():
+                return cand
     return None
 
 
-WS = find_ws()
-if WS is not None:
-    sys.path.insert(0, str(WS / "src" / "ican_recognize"))
-else:
-    # 退路：按仓库布局直接找包目录（交付包/识别/脚本 -> ../../sim_ws/src）
-    cand = SCRIPT_DIR.parent.parent / "sim_ws" / "src" / "ican_recognize"
-    if (cand / "ican_recognize").is_dir():
-        sys.path.insert(0, str(cand))
+_PKG_DIR = find_pkg_dir()
+if _PKG_DIR is not None:
+    sys.path.insert(0, str(_PKG_DIR))
 
 try:
     from ican_recognize.scripts_table import CLASS_SCRIPT  # noqa: E402
 except ModuleNotFoundError as exc:  # pragma: no cover
+    searched = "\n".join(
+        f"  {b.joinpath(*rel)}" for b in [SCRIPT_DIR, *SCRIPT_DIR.parents] for rel in _PKG_LAYOUTS
+    )
     sys.exit(
         f"找不到 ican_recognize.scripts_table（{exc}）。\n"
-        f"请先 colcon build 并在仓库根执行，或用 --ws 显式指定工作空间。"
+        f"已尝试以下位置：\n{searched}\n"
+        f"解决办法（任选其一）：\n"
+        f"  1) 先 source 工作空间：source sim_ws/install/setup.bash\n"
+        f"  2) 指定工作空间：ICAN_WS=$PWD/sim_ws python3 {Path(__file__).name}\n"
     )
 
 SCRIPT2CLS = {v: k for k, v in CLASS_SCRIPT.items()}

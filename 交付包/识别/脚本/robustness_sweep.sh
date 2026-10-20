@@ -147,10 +147,20 @@ run_one() {  # $1 = seed（基线传 default）
   echo "[$seed] ✅ 环境就绪"
 
   # 4) 跑 5×N 验收
+  #    必须先 source ROS + 工作空间，否则 python 里 import rclpy / ican_recognize 会失败
   echo "[$seed] 开始 5 点位 × ${PER_POINT} 次 ..."
   set +e
-  ( cd "$WS" && python3 "$SCRIPT_DIR/acceptance_run.py" \
-      --dist "$DIST" --per-point "$PER_POINT" --seed "$seed" --out "$out" )
+  (
+    set +u
+    # shellcheck disable=SC1091
+    source /opt/ros/humble/setup.bash
+    # shellcheck disable=SC1091
+    source "$WS/install/setup.bash"
+    set -u
+    cd "$WS"
+    ICAN_WS="$WS" python3 "$SCRIPT_DIR/acceptance_run.py" \
+      --dist "$DIST" --per-point "$PER_POINT" --seed "$seed" --out "$out"
+  )
   local rc=$?
   set -e
 
@@ -193,8 +203,10 @@ echo "============================================================"
 cat "$SUMMARY"
 echo
 
-PASS=$(grep -c "结论: 通过" "$SUMMARY" 2>/dev/null || echo 0)
-TOTAL=$(grep -c "^### seed" "$SUMMARY" 2>/dev/null || echo 0)
+PASS=$(grep -c "结论: 通过" "$SUMMARY" 2>/dev/null || true)
+PASS=${PASS:-0}
+TOTAL=$(grep -c "^### seed" "$SUMMARY" 2>/dev/null || true)
+TOTAL=${TOTAL:-0}
 echo "达标轮数: ${PASS}/${TOTAL}（验收要求：每轮 >=90%）"
 if [ -n "$FAILED" ]; then
   echo "⚠️ 失败的 seed:$FAILED"
