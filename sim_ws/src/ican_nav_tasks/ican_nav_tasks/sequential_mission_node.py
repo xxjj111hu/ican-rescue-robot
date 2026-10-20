@@ -23,6 +23,7 @@
 import json
 import math
 import os
+import time
 
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Quaternion, Twist
@@ -30,7 +31,6 @@ from nav_msgs.msg import Odometry
 from nav2_msgs.action import NavigateToPose
 import rclpy
 from rclpy.action import ActionClient
-from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -186,15 +186,13 @@ class SequentialMissionNode(Node):
 
         # 状态
         self.state = "WAITING"
-        self.boot = self.get_clock().now()
-        # 时间统一用"秒（float）"算，避免依赖 rclpy Duration 的运算符支持
-        # （Duration + Duration 并不保证可用，早期版本会在 tick 里抛 TypeError，
-        #   导致状态机静默停摆——现象就是节点活着但一条日志都不再输出）
+        # 状态机内部计时一律用"单调墙钟"，不用仿真时钟。
+        # 原因：use_sim_time=true 时 rclpy 的定时器由 /clock 驱动，一旦节点没收到
+        # /clock 或仿真时钟停滞，定时器就永不触发，状态机静默停摆（节点活着但
+        # 一条日志都不打）。而"等 20 秒""导航超时 120 秒"本质是真实时间语义。
+        # 消息时间戳（goal pose）仍按 Nav2 的期望处理，见 send_goal。
+        self.boot = time.monotonic()
         self.start_delay_sec = float(self.get_parameter("start_delay_sec").value)
-        self.start_delay = Duration(seconds=self.start_delay_sec)
-        self.nav_timeout = Duration(
-            seconds=float(self.get_parameter("nav_timeout_sec").value)
-        )
         self.nav_timeout_sec = float(self.get_parameter("nav_timeout_sec").value)
         self.wp_index = 0
         self.nav_goal_handle = None
@@ -216,7 +214,8 @@ class SequentialMissionNode(Node):
         self.last_progress = None  # 进度日志时间戳
 
         # 5 Hz state machine tick (was 10 Hz) to reduce CPU on the VM
-        self.timer = self.create_timer(0.2, self.tick)
+        # 墙钟定时器：不受 /clock 影响，保证状态机一定在推进
+        self.timer = self.create_wall_timer(0.2, self.tick)
         self.get_logger().info(
             f"顺序导航节点就绪：{len(self.waypoints)} 个任务点，"
             f"返航={'是' if self.return_to_base else '否'}。"
@@ -302,7 +301,8 @@ class SequentialMissionNode(Node):
         goal = NavigateToPose.Goal()
         goal.pose = PoseStamped()
         goal.pose.header.frame_id = "map"
-        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        # 不设置 stamp（保持 0）：Nav2 会取"最新可用变换"，避免因时间基准不一致
+        # 触发 "Extrapolation Error ... would require extrapolation into the past"。
         goal.pose.pose.position.x = float(x)
         goal.pose.pose.position.y = float(y)
         qx, qy, qz, qw = quat_from_yaw(float(yaw))
@@ -310,7 +310,7 @@ class SequentialMissionNode(Node):
         self.current_target = (float(x), float(y), float(yaw), label)
         self.nav_goal_handle = None
         self.nav_result_future = None
-        self.nav_start = self.get_clock().now()
+        self.nav_start = time.monotonic()
         self.state = "NAVIGATING"
         self.get_logger().info(
             f"发送导航目标 {label}: ({x:.3f}, {y:.3f}, {yaw:.2f})"
@@ -329,9 +329,9 @@ class SequentialMissionNode(Node):
                     f"{self.goal_retries}/{self.max_goal_retries} 延时重试。"
                 )
                 self.state = "NAVIGATING"
-                self.nav_start = self.get_clock().now()
+                self.nav_start = time.monotonic()
                 delay = float(self.get_parameter("goal_retry_sec").value)
-                self.retry_timer = self.create_timer(delay, self.resend_current_goal)
+                self.retry_timer = self.create_wall_timer(delay, self.resend_current_goal)
                 return
             self.get_logger().error(
                 f"Nav2 多次拒绝导航目标({self.current_target[3]})，按到达处理继续。"
@@ -353,8 +353,8 @@ class SequentialMissionNode(Node):
 
     # ---------------- 主循环 ----------------
     def tick(self):
-        now = self.get_clock().now()
-        elapsed = (now - self.boot).nanoseconds / 1e9
+        now = time.monotonic()
+        elapsed = now - self.boot
         if self.state == "WAITING":
             if elapsed >= self.start_delay_sec:
                 if self.amcl is None:
@@ -378,9 +378,7 @@ class SequentialMissionNode(Node):
 
         if self.state == "NAVIGATING":
             # 进度日志：每 10s 输出剩余距离（无 GUI 排错用）
-            if self.last_progress is None or now - self.last_progress >= Duration(
-                seconds=10.0
-            ):
+            if self.last_progress is None or now - self.last_progress >= 10.0:
                 if self.amcl is not None and self.current_target is not None:
                     dx = self.current_target[0] - self.amcl["x"]
                     dy = self.current_target[1] - self.amcl["y"]
@@ -405,7 +403,7 @@ class SequentialMissionNode(Node):
                 return
             if (
                 self.nav_start is not None
-                and now - self.nav_start > self.nav_timeout
+                and now - self.nav_start > self.nav_timeout_sec
             ):
                 self.get_logger().warn(
                     f"导航超时 @ {self.current_target[3]}，取消并继续。"
@@ -425,7 +423,7 @@ class SequentialMissionNode(Node):
 
         if self.state == "SETTLING":
             self.stop_robot()
-            if now - self.settle_start >= Duration(seconds=self.settle_sec):
+            if now - self.settle_start >= self.settle_sec:
                 self.finish_parking()
             return
 
@@ -509,7 +507,7 @@ class SequentialMissionNode(Node):
                 )
             if err > self.xy_tol:
                 self.get_logger().info(f"{label} 超出容差，进入微调(NUDGE)。")
-                self.nudge_start = self.get_clock().now()
+                self.nudge_start = time.monotonic()
                 self.state = "NUDGE"
                 return
         self.after_arrived()
@@ -521,9 +519,7 @@ class SequentialMissionNode(Node):
         # ---- 第一段：到达识别位 → 原地等识别话术 ----
         if label.endswith(":standoff"):
             self.got_script = False
-            self.recog_deadline = self.get_clock().now() + Duration(
-                seconds=self.recognize_wait
-            )
+            self.recog_deadline = time.monotonic() + self.recognize_wait
             self.get_logger().info(
                 f"[识别] 已到达识别位 {label}，等待话术（最长 "
                 f"{self.recognize_wait:.1f}s）后再进入点位。"
@@ -540,15 +536,13 @@ class SequentialMissionNode(Node):
             self.begin_next()
         elif label.startswith("base"):
             self.publish_event("returned:base")
-            self.nudge_start = self.get_clock().now()
+            self.nudge_start = time.monotonic()
             self.state = "PARK_NUDGE"
         else:
             self.finish_mission()
 
     def do_nudge(self, now, tol, on_done):
-        if self.amcl is None or now - self.nudge_start > Duration(
-            seconds=self.nudge_max_sec
-        ):
+        if self.amcl is None or now - self.nudge_start > self.nudge_max_sec:
             self.get_logger().warn("微调超时/无定位，继续后续流程。")
             self.stop_robot()
             on_done()
@@ -572,7 +566,7 @@ class SequentialMissionNode(Node):
 
     def enter_settling(self):
         self.stop_robot()
-        self.settle_start = self.get_clock().now()
+        self.settle_start = time.monotonic()
         self.state = "SETTLING"
 
     def finish_parking(self):
