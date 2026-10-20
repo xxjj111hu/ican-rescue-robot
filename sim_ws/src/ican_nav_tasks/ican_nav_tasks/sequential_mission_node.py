@@ -703,7 +703,11 @@ class SequentialMissionNode(Node):
         self.get_logger().info(text)
         if self.result_file:
             try:
-                with open(self.result_file, "w", encoding="utf-8") as f:
+                # 目标目录（默认 ~/.ros/ican_nav_tasks/）可能不存在，先创建
+                parent = os.path.dirname(os.path.expanduser(self.result_file))
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(os.path.expanduser(self.result_file), "w", encoding="utf-8") as f:
                     f.write(text + "\n")
             except Exception as e:  # noqa: BLE001
                 self.get_logger().warn(f"写结果文件失败: {e}")
