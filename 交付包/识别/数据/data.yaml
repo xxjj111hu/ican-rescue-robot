@@ -1,4 +1,4 @@
-path: .
+path: /home/longying01/demo_shoot_ws/dataset_all
 train: images/train
 val: images/val
 nc: 5
