@@ -406,8 +406,10 @@ class SequentialMissionNode(Node):
                         )
                         self.amcl = dict(self.odom)
                     else:
-                        if int(now.nanoseconds // 5e9) != getattr(self, "_last_wait_log", -1):
-                            self._last_wait_log = int(now.nanoseconds // 5e9)
+                        # now 是 time.monotonic() 的 float 秒，按 5 秒节流打日志
+                        slot = int(now // 5)
+                        if slot != getattr(self, "_last_wait_log", -1):
+                            self._last_wait_log = slot
                             self.get_logger().info("等待 AMCL 定位就绪后再开始导航。")
                         return
                 self.begin_next()
