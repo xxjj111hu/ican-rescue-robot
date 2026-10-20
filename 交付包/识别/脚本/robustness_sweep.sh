@@ -157,7 +157,7 @@ run_one() {  # $1 = seed（基线传 default）
 
   # 4) 跑 5×N 验收
   #    必须先 source ROS + 工作空间，否则 python 里 import rclpy / ican_recognize 会失败
-  echo "[$seed] 开始 5 点位 × ${PER_POINT} 次 ..."
+  echo "[$seed] 开始 ${POINTS} 点位 × ${PER_POINT} 次 ..."
   set +e
   (
     set +u
