@@ -35,7 +35,12 @@ from rclpy.action import ActionClient
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -181,9 +186,12 @@ class SequentialMissionNode(Node):
         self.create_subscription(
             PoseWithCovarianceStamped, "/amcl_pose", self.on_amcl, amcl_qos
         )
-        # /odom 由 gazebo_ros_planar_move 插件发布，类型为 nav_msgs/msg/Odometry（真值位姿）
+        # /odom 由 gazebo_ros_planar_move 插件发布（真值位姿）。
+        # Gazebo 插件通常用 SensorDataQoS(BEST_EFFORT) 发布，若订阅端用默认的
+        # RELIABLE 会**完全收不到**（且不报错），表现就是 odom 一直是 None。
+        # 用 qos_profile_sensor_data(BEST_EFFORT) 可同时兼容 BEST_EFFORT 与 RELIABLE 发布端。
         self.create_subscription(
-            Odometry, "/odom", self.on_odom, 10
+            Odometry, "/odom", self.on_odom, qos_profile_sensor_data
         )
 
         # 状态
@@ -398,13 +406,21 @@ class SequentialMissionNode(Node):
                     # 兜底：AMCL 长时间不发位姿时，若 /odom 已有数据就用真值位姿顶上。
                     # 否则会死锁——任务等 AMCL、AMCL 只在机器人移动时才更新位姿，
                     # 而机器人又因为任务没启动而不动。
-                    if (elapsed >= self.start_delay_sec + self.amcl_fallback_sec
-                            and self.odom is not None):
-                        self.get_logger().warn(
-                            f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
-                            f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
-                        )
-                        self.amcl = dict(self.odom)
+                    if (elapsed >= self.start_delay_sec + self.amcl_fallback_sec):
+                        if self.odom is not None:
+                            self.get_logger().warn(
+                                f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
+                                f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
+                            )
+                            self.amcl = dict(self.odom)
+                        else:
+                            # 连 /odom 都没有也不能卡死：Nav2 自己会用 TF 完成定位，
+                            # 本节点的失败只影响"到点误差统计"和微调，不影响能否导航。
+                            self.get_logger().warn(
+                                f"AMCL 与 /odom 均未收到（已等 "
+                                f"{self.start_delay_sec + self.amcl_fallback_sec:.0f}s），"
+                                f"仍继续导航（定位由 Nav2/TF 自行负责）。"
+                            )
                     else:
                         # now 是 time.monotonic() 的 float 秒，按 5 秒节流打日志
                         slot = int(now // 5)
