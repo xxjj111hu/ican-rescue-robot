@@ -223,7 +223,13 @@ def main():
     subprocess.run([sys.executable, str(goto), "--x", "0", "--y", "0", "--yaw", "0"],
                    capture_output=True, text=True, timeout=180)
 
-    overall = ok / max(total, 1) * 100
+    # 统计口径：分母必须是"应采次数" 5 × per_point。
+    # 否则某个点位一条都没采到（got=0）时会被直接排除，把总体拉高成假通过。
+    expected_total = 5 * args.per_point
+    overall = ok / max(expected_total, 1) * 100
+    short = [(pid, got) for pid, _, _, got, _ in rows if got < args.per_point]
+    collected = sum(got for _, _, _, got, _ in rows)
+
     title = "验收口径实测（5 点位 × {} 次，听 /referee/detections）".format(args.per_point)
     lines = ["=" * 60, title, f"停车距离: {args.dist} m"]
     if args.seed:
@@ -231,13 +237,21 @@ def main():
     lines.append(f"真值来源: {truth_src}")
     lines.append("")
     for pid, cls, hit, got, rate in rows:
-        lines.append(f"点位{pid} ({ZH[cls]}): {hit}/{got} = {rate:.0f}%")
-    lines += ["", f"总体: {ok}/{total} = {overall:.1f}%   (验收线 >= 90%)",
-              "结论: " + ("通过" if overall >= 90 else "未通过"), "=" * 60]
+        flag = "" if got >= args.per_point else f"   ⚠️ 采集不足（{got}/{args.per_point}）"
+        lines.append(f"点位{pid} ({ZH[cls]}): {hit}/{got} = {rate:.0f}%{flag}")
+    if short:
+        lines.append("")
+        lines.append("采集不足的点位：" + ", ".join(
+            f"点位{pid}（{got}/{args.per_point}）" for pid, got in short))
+        lines.append("  原因通常是：未在该点停稳/朝向偏出视野/距离不在门控窗口内/识别节点未发布。")
+        lines.append("  按验收口径，未采到的次数计为失败。")
+    lines += ["", f"实际采集: {collected}/{expected_total} 次   正确: {ok} 次",
+              f"总体: {ok}/{expected_total} = {overall:.1f}%   (验收线 >= 90%)",
+              "结论: " + ("通过" if (overall >= 90 and not short) else "未通过"), "=" * 60]
     rep = "\n".join(lines)
     print("\n" + rep)
     out_path.write_text(rep + "\n", encoding="utf-8")
-    return 0 if overall >= 90 else 1
+    return 0 if (overall >= 90 and not short) else 1
 
 
 if __name__ == "__main__":
