@@ -187,12 +187,15 @@ class SequentialMissionNode(Node):
         # 状态
         self.state = "WAITING"
         self.boot = self.get_clock().now()
-        self.start_delay = Duration(
-            seconds=float(self.get_parameter("start_delay_sec").value)
-        )
+        # 时间统一用"秒（float）"算，避免依赖 rclpy Duration 的运算符支持
+        # （Duration + Duration 并不保证可用，早期版本会在 tick 里抛 TypeError，
+        #   导致状态机静默停摆——现象就是节点活着但一条日志都不再输出）
+        self.start_delay_sec = float(self.get_parameter("start_delay_sec").value)
+        self.start_delay = Duration(seconds=self.start_delay_sec)
         self.nav_timeout = Duration(
             seconds=float(self.get_parameter("nav_timeout_sec").value)
         )
+        self.nav_timeout_sec = float(self.get_parameter("nav_timeout_sec").value)
         self.wp_index = 0
         self.nav_goal_handle = None
         self.nav_result_future = None
@@ -351,16 +354,15 @@ class SequentialMissionNode(Node):
     # ---------------- 主循环 ----------------
     def tick(self):
         now = self.get_clock().now()
+        elapsed = (now - self.boot).nanoseconds / 1e9
         if self.state == "WAITING":
-            if now - self.boot >= self.start_delay:
+            if elapsed >= self.start_delay_sec:
                 if self.amcl is None:
                     # 兜底：AMCL 长时间不发位姿时，若 /odom 已有数据就用真值位姿顶上。
                     # 否则会死锁——任务等 AMCL、AMCL 只在机器人移动时才更新位姿，
                     # 而机器人又因为任务没启动而不动。
-                    overdue = now - self.boot >= (
-                        self.start_delay + Duration(seconds=self.amcl_fallback_sec)
-                    )
-                    if overdue and self.odom is not None:
+                    if (elapsed >= self.start_delay_sec + self.amcl_fallback_sec
+                            and self.odom is not None):
                         self.get_logger().warn(
                             f"等待 AMCL 位姿超过 {self.amcl_fallback_sec:.0f}s 仍无数据，"
                             f"改用 /odom 真值位姿继续（仿真中 /odom 即真实位姿）。"
