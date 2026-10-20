@@ -157,13 +157,11 @@ controller_server:
       vx_std: 0.45
       vy_std: 0.55
       wz_std: 0.9
-      # [SpeedLimit 官方 §1.1(4)] 移动速度 >0.5 m/s 会被裁判锁定该任务后续计分。
-      # 原 per-axis 0.35 => 合成 sqrt(0.35^2+0.35^2)=0.495 m/s，余量仅 1.0%，过于危险。
-      # 现收紧到 0.30 => 合成 0.424 m/s，余量 15.1%；全程行驶时间仅增加约 3 秒。
-      vx_max: 0.30
-      vx_min: -0.30
-      vy_max: 0.30
-      vy_min: -0.30
+      # [SpeedLimit Task12] per-axis cap 0.35 => combined linear max sqrt(0.35^2+0.35^2)=0.495 < 0.5 m/s
+      vx_max: 0.35
+      vx_min: -0.35
+      vy_max: 0.35
+      vy_min: -0.35
       wz_max: 2.0
       ax_max: 2.0
       ax_min: -2.0
@@ -244,7 +242,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 6.0
-        inflation_radius: 0.25
+        inflation_radius: 0.20
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -297,7 +295,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 6.0
-        inflation_radius: 0.25
+        inflation_radius: 0.20
       always_send_full_costmap: True
 
 map_server:
@@ -382,8 +380,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.30, 0.30, 2.0]
-    min_velocity: [-0.30, -0.30, -2.0]
+    max_velocity: [0.35, 0.35, 2.0]
+    min_velocity: [-0.35, -0.35, -2.0]
     max_accel: [3.0, 3.5, 6.0]
     max_decel: [-3.0, -3.5, -6.0]
     odom_topic: "odom"
