@@ -321,23 +321,35 @@ class RingShooterNode(Node):
                 f"/shooter/shoot 返回 success={res.success} message='{res.message}'")
 
         # 等 /shooter/shot 确认发射
+        # 实测：该话题**每发都会发布**，payload 是子弹名（如 bullet_08ac4d6b7a），
+        # 不是只在命中时发 —— 因此可用作"确实射出了"的确认。
+        # 注意竞态：消息可能正好落在最后一轮轮询的 sleep 空档里（实测差 10 ms
+        # 被误判为失败），所以超时后再宽限复查一次。
         ok_shot = False
-        t_wait = time.monotonic()
-        while time.monotonic() - t_wait < self.shot_wait:
+        bullet = ""
+        deadline = time.monotonic() + self.shot_wait
+        while time.monotonic() < deadline:
             _, _, n = self._snapshot()
             if n > shot0:
                 ok_shot = True
                 break
-            time.sleep(0.05)
+            time.sleep(0.03)
+        if not ok_shot:
+            time.sleep(0.3)          # 宽限复查，消除轮询竞态
+            _, _, n = self._snapshot()
+            ok_shot = n > shot0
+        if ok_shot:
+            with self._lock:
+                bullet = self.last_shot_name
 
         if ok_shot:
             response.success = True
-            response.message = (f"已射击；dx={last_dx:+.1f}px，估算 {rings:.1f} 环，"
-                                f"瞄准耗时 {aim_sec:.1f}s")
+            response.message = (f"已射击并确认射出（{bullet}）；dx={last_dx:+.1f}px，"
+                                f"估算 {rings:.1f} 环，瞄准耗时 {aim_sec:.1f}s")
         else:
             response.success = False
-            response.message = (f"射击服务已调用，但 {self.shot_wait:.1f}s 内未收到 "
-                                f"/shooter/shot（dx={last_dx:+.1f}px）")
+            response.message = (f"射击服务已调用，但 {self.shot_wait:.1f}s（含 0.3s 宽限）"
+                                f"内仍未收到 /shooter/shot（dx={last_dx:+.1f}px）")
         self.get_logger().info(response.message)
         self._publish_status("done" if ok_shot else "error", detail=response.message)
         return response
