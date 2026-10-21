@@ -1,25 +1,79 @@
 #!/usr/bin/env python3
 """按验收口径跑一遍：5 个点位 × 每点 10 次，听 /referee/detections 话术判定。
 
-自动开车到 0.8 m 停车位（不靠手开），每点收集 10 条话术，与 assignment 真值比对。
-用法:
-  python3 scripts/acceptance_run.py --dist 0.8 --per-point 10
+自动开车到指定距离的停车位（不靠手开），每点收集 N 条话术，与真值比对。
+
+真值来源（按优先级）
+--------------------
+1) `--assign` 指定的 json（`randomize_ground_textures.py` 生成的 assignment 文件）
+2) `/opt/ican_shoot_sim/share/ican_land_sim/materials/shooting_texture_assignment.json`
+3) 若都不存在，直接解析 `ican_land.material` 推断每个点位的贴图类别
+   —— 这样即使还没跑过随机化，也能用"默认分配"做基线验收。
+
+前提
+----
+- 仿真 + Nav2 已启动，识别节点在跑，**顺序任务节点不能启动**
+  （用 `bash sim_ws/start_all.sh --no-mission`），否则它自己会开车抢控制权。
+
+用法
+----
+  python3 交付包/识别/脚本/acceptance_run.py --dist 0.8 --per-point 10 \
+      --out 交付包/识别/报告/acc_seed201_v9.txt
 """
 import argparse
 import json
 import math
+import os
+import re
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
+SCRIPT_DIR = Path(__file__).resolve().parent
 
-WS = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WS / "src" / "ican_recognize"))
-from ican_recognize.scripts_table import CLASS_SCRIPT  # noqa: E402
+# 可能承载 ican_recognize 包的路径形态：
+#   标准 colcon 工作空间:  <ws>/src/ican_recognize
+#   本仓库布局:            <repo>/sim_ws/src/ican_recognize
+_PKG_LAYOUTS = (("src", "ican_recognize"), ("sim_ws", "src", "ican_recognize"))
+
+
+def find_pkg_dir() -> Path | None:
+    """向上逐级查找 ican_recognize 包的父目录（即 sys.path 需要的那一层）。
+
+    注意：脚本位于 <repo>/交付包/识别/脚本/，
+    所以仓库根是 parents[2]，不能只写 parent.parent。
+    另外支持环境变量 ICAN_WS 直接指定工作空间。
+    """
+    bases = [SCRIPT_DIR, *SCRIPT_DIR.parents]
+    env = os.environ.get("ICAN_WS")
+    if env:
+        bases.append(Path(env))
+    for base in bases:
+        for rel in _PKG_LAYOUTS:
+            cand = base.joinpath(*rel)
+            if (cand / "ican_recognize" / "__init__.py").is_file():
+                return cand
+    return None
+
+
+_PKG_DIR = find_pkg_dir()
+if _PKG_DIR is not None:
+    sys.path.insert(0, str(_PKG_DIR))
+
+try:
+    from ican_recognize.scripts_table import CLASS_SCRIPT  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover
+    searched = "\n".join(
+        f"  {b.joinpath(*rel)}" for b in [SCRIPT_DIR, *SCRIPT_DIR.parents] for rel in _PKG_LAYOUTS
+    )
+    sys.exit(
+        f"找不到 ican_recognize.scripts_table（{exc}）。\n"
+        f"已尝试以下位置：\n{searched}\n"
+        f"解决办法（任选其一）：\n"
+        f"  1) 先 source 工作空间：source sim_ws/install/setup.bash\n"
+        f"  2) 指定工作空间：ICAN_WS=$PWD/sim_ws python3 {Path(__file__).name}\n"
+    )
 
 SCRIPT2CLS = {v: k for k, v in CLASS_SCRIPT.items()}
 ZH = {"trapped_people": "被困人员", "rescue_camp": "救援营地", "collapsed_ruins": "坍塌废墟",
@@ -27,36 +81,160 @@ ZH = {"trapped_people": "被困人员", "rescue_camp": "救援营地", "collapse
 GROUND = {0: (1.115218, -1.356470), 1: (0.030951, -1.359743), 2: (0.027137, -2.700000),
           3: (1.120240, -1.913890), 4: (1.120112, -0.784766)}
 APPROACH = {0: (1.0, 0.0), 1: (0.0, -1.0), 2: (0.0, -1.0), 3: (1.0, 0.0), 4: (1.0, 0.0)}
-ASSIGN = "/opt/ican_shoot_sim/share/ican_land_sim/materials/shooting_texture_assignment.json"
+
+# 实测标定的停车位（0.70 m，已用地图占据栅格校验 0.25 m 内无占据），
+# 与 ican_nav_tasks/config/waypoints.yaml 的 standoff_waypoints、以及
+# 交付包/识别/脚本/goto_pose.py 的 STANDOFF_POSES 保持一致。
+#
+# 为什么必须用这张表而不是「贴图坐标 - 接近方向 × dist」：
+# 识别节点的门控用「离哪个地面贴图最近」来算距离，而全部停车位都离
+# 点位 1 的贴图最近。几何计算出来的停车位会让最近距离落到 0.60 m 门控
+# 下限之外（点位 0 只有 0.284 m、点位 2 只有 0.540 m），门控永远不打开，
+# 表现就是这两个点位一条话术都采集不到。
+MEASURED = {
+    0: (0.415, -1.356, 0.0),
+    1: (0.031, -0.660, -1.5708),
+    2: (0.027, -2.000, -1.5708),
+    3: (0.420, -1.914, 0.0),
+    4: (0.420, -0.785, 0.0),
+}
+
+DEFAULT_SHARE = Path("/opt/ican_shoot_sim/share/ican_land_sim")
+ASSIGN_DEFAULT = DEFAULT_SHARE / "materials" / "shooting_texture_assignment.json"
+MATERIAL_DEFAULT = DEFAULT_SHARE / "materials" / "scripts" / "ican_land.material"
+
+# 贴图文件名 -> 类别（去掉结尾的 _数字 与扩展名）
+TEXTURE_RE = re.compile(r"^(?P<cls>.+?)_\d+\.(?:png|jpg|jpeg)$", re.IGNORECASE)
+
+
+def class_from_texture(name: str) -> str | None:
+    m = TEXTURE_RE.match(Path(name).name)
+    if not m:
+        return None
+    cls = m.group("cls").lower()
+    return cls if cls in ZH else None
+
+
+def truth_from_material(material_path: Path) -> dict[int, str]:
+    """解析 ican_land.material，取出 ShootingGroundTargetN 的贴图类别。"""
+    text = material_path.read_text(encoding="utf-8", errors="replace")
+    result: dict[int, str] = {}
+    for m in re.finditer(
+        r"material\s+ShootingGroundTarget(\d+)\s*\{(.*?)\n\}", text, re.DOTALL
+    ):
+        idx = int(m.group(1))
+        tex = re.search(r"texture\s+(\S+)", m.group(2))
+        if not tex:
+            continue
+        cls = class_from_texture(tex.group(1))
+        if cls:
+            result[idx] = cls
+    return result
+
+
+def load_truth(assign_path: Path | None, material_path: Path) -> tuple[dict[int, str], str]:
+    """返回 (点位->类别, 真值来源说明)。"""
+    path = assign_path or ASSIGN_DEFAULT
+    if path.is_file():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assign = data.get("ground_type_assignment", {})
+        truth = {int(k[len("ShootingGroundTarget"):]): v
+                 for k, v in assign.items() if k.startswith("ShootingGroundTarget")}
+        if truth:
+            return truth, f"assignment json: {path}"
+    if material_path.is_file():
+        truth = truth_from_material(material_path)
+        if truth:
+            return truth, f"material 文件（默认分配）: {material_path}"
+    raise SystemExit(
+        f"无法确定真值：\n  json 不存在: {path}\n  material 不存在: {material_path}\n"
+        f"请先运行随机化脚本生成分配，或用 --assign 指定。"
+    )
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dist", type=float, default=0.8)
+    ap.add_argument("--standoff", choices=["measured", "computed"], default="measured",
+                    help="measured=用实测标定停车位（默认，推荐）；"
+                         "computed=贴图坐标-接近方向×dist（会落入门控盲区，仅用于对比）")
     ap.add_argument("--per-point", type=int, default=10)
-    ap.add_argument("--timeout", type=float, default=40.0)
-    ap.add_argument("--out", default=str(WS / "acceptance_report.txt"))
+    ap.add_argument("--timeout", type=float, default=40.0, help="单点采集超时（秒）")
+    ap.add_argument("--assign", default=None, help="真值 json 路径（可省略）")
+    ap.add_argument("--material", default=str(MATERIAL_DEFAULT),
+                    help="无 json 时用该 material 文件推断真值")
+    ap.add_argument("--goto", default=str(SCRIPT_DIR / "goto_pose.py"),
+                    help="goto_pose.py 路径")
+    ap.add_argument("--out", default=None,
+                    help="结果文件；默认 交付包/识别/报告/acceptance_run.txt")
+    ap.add_argument("--points", default="0,1,2,3,4",
+                    help="参与验收的点位，逗号分隔。默认 0,1,2,3,4（5 点位口径）；"
+                         "若任务书只有 4 个任务点，用 --points 1,2,3,4")
     args = ap.parse_args()
 
-    assign = json.loads(Path(ASSIGN).read_text(encoding="utf-8"))["ground_type_assignment"]
-    expect = {int(k[-1]): v for k, v in assign.items()}
+    try:
+        points = [int(x) for x in args.points.split(",") if x.strip() != ""]
+    except ValueError:
+        raise SystemExit(f"--points 格式错误: {args.points}")
+    bad = [p for p in points if p not in range(5)]
+    if bad:
+        raise SystemExit(f"--points 含非法点位 {bad}（只支持 0~4）")
+    if not points:
+        raise SystemExit("--points 不能为空")
+    points = sorted(set(points))
+
+    expect, truth_src = load_truth(
+        Path(args.assign) if args.assign else None, Path(args.material)
+    )
+    missing = [p for p in points if p not in expect]
+    if missing:
+        raise SystemExit(f"真值缺少点位 {missing}；来源 {truth_src}")
+
+    goto = Path(args.goto)
+    if not goto.is_file():
+        raise SystemExit(f"找不到 goto_pose.py: {goto}")
+    if not os.access(goto, os.R_OK):
+        raise SystemExit(f"goto_pose.py 不可读: {goto}")
+
+    out_path = Path(args.out) if args.out else (
+        SCRIPT_DIR.parent / "报告" / f"acceptance_run{'_seed' + args.seed if args.seed else ''}.txt"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"真值来源: {truth_src}")
+    print(f"真值: " + ", ".join(f"{p}={ZH[c]}" for p, c in sorted(expect.items())))
+    print(f"结果将写入: {out_path}")
+    print()
+
+    import rclpy
+    from rclpy.node import Node
+    from std_msgs.msg import String
 
     rclpy.init()
     node = Node("acceptance_run")
-    q = []
+    q: list[str] = []
     node.create_subscription(String, "/referee/detections", lambda m: q.append(m.data), 10)
 
     rows, ok, total = [], 0, 0
-    for pid in range(5):
-        tx, ty = GROUND[pid]
-        ux, uy = APPROACH[pid]
-        yaw = math.atan2(uy, ux)
-        sx, sy = tx - ux * args.dist, ty - uy * args.dist
-        r = subprocess.run(["python3", "scripts/goto_pose.py", "--x", f"{sx:.4f}",
-                            "--y", f"{sy:.4f}", "--yaw", f"{yaw:.4f}"],
-                           capture_output=True, text=True, timeout=180)
-        if "到位" not in r.stdout:
-            print(f"点位{pid}: 开车失败，跳过")
+    for pid in points:
+        if args.standoff == "measured":
+            sx, sy, yaw = MEASURED[pid]
+        else:
+            tx, ty = GROUND[pid]
+            ux, uy = APPROACH[pid]
+            yaw = math.atan2(uy, ux)
+            sx, sy = tx - ux * args.dist, ty - uy * args.dist
+        try:
+            r = subprocess.run(
+                [sys.executable, str(goto), "--x", f"{sx:.4f}",
+                 "--y", f"{sy:.4f}", "--yaw", f"{yaw:.4f}"],
+                capture_output=True, text=True, timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"点位{pid}: 开车超时，跳过")
+            continue
+        if "到位" not in (r.stdout or ""):
+            print(f"点位{pid}: 开车失败，跳过（{r.stdout[-200:]}{r.stderr[-200:]}）")
             continue
         time.sleep(3.0)
         q.clear()
@@ -78,20 +256,39 @@ def main():
         print(f"点位{pid} ({ZH[expect[pid]]}): {hit}/{got} = {rate:.0f}%")
 
     rclpy.shutdown()
-    subprocess.run(["python3", "scripts/goto_pose.py", "--x", "0", "--y", "0", "--yaw", "0"],
+    subprocess.run([sys.executable, str(goto), "--x", "0", "--y", "0", "--yaw", "0"],
                    capture_output=True, text=True, timeout=180)
 
-    overall = ok / max(total, 1) * 100
-    lines = ["=" * 60, "验收口径实测（5 点位 × 10 次，听 /referee/detections）",
-             f"停车距离: {args.dist} m", ""]
+    # 统计口径：分母必须是"应采次数" 5 × per_point。
+    # 否则某个点位一条都没采到（got=0）时会被直接排除，把总体拉高成假通过。
+    expected_total = len(points) * args.per_point
+    overall = ok / max(expected_total, 1) * 100
+    short = [(pid, got) for pid, _, _, got, _ in rows if got < args.per_point]
+    collected = sum(got for _, _, _, got, _ in rows)
+
+    title = "验收口径实测（{} 点位 × {} 次，听 /referee/detections）".format(len(points), args.per_point)
+    lines = ["=" * 60, title, f"停车距离: {args.dist} m"]
+    if args.seed:
+        lines.append(f"随机化 seed: {args.seed}")
+    lines.append(f"真值来源: {truth_src}")
+    lines.append("")
     for pid, cls, hit, got, rate in rows:
-        lines.append(f"点位{pid} ({ZH[cls]}): {hit}/{got} = {rate:.0f}%")
-    lines += ["", f"总体: {ok}/{total} = {overall:.1f}%   (验收线 >= 90%)",
-              "结论: " + ("通过" if overall >= 90 else "未通过"), "=" * 60]
+        flag = "" if got >= args.per_point else f"   ⚠️ 采集不足（{got}/{args.per_point}）"
+        lines.append(f"点位{pid} ({ZH[cls]}): {hit}/{got} = {rate:.0f}%{flag}")
+    if short:
+        lines.append("")
+        lines.append("采集不足的点位：" + ", ".join(
+            f"点位{pid}（{got}/{args.per_point}）" for pid, got in short))
+        lines.append("  原因通常是：未在该点停稳/朝向偏出视野/距离不在门控窗口内/识别节点未发布。")
+        lines.append("  按验收口径，未采到的次数计为失败。")
+    lines += ["", f"实际采集: {collected}/{expected_total} 次   正确: {ok} 次",
+              f"总体: {ok}/{expected_total} = {overall:.1f}%   (验收线 >= 90%)",
+              "结论: " + ("通过" if (overall >= 90 and not short) else "未通过"), "=" * 60]
     rep = "\n".join(lines)
     print("\n" + rep)
-    Path(args.out).write_text(rep, encoding="utf-8")
+    out_path.write_text(rep + "\n", encoding="utf-8")
+    return 0 if (overall >= 90 and not short) else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
