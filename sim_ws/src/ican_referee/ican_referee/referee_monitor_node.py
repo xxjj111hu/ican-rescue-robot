@@ -134,6 +134,17 @@ class RefereeMonitorNode(Node):
 
 
 def main():
+    # 后台运行时没有 Ctrl-C，用 SIGTERM（pkill）也能走到 finally 打印接口小结
+    import signal
+
+    def _on_term(_signum, _frame):
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+    except Exception:  # noqa: BLE001
+        pass
+
     rclpy.init()
     node = RefereeMonitorNode()
     try:
