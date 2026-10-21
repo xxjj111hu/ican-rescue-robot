@@ -1,0 +1,41 @@
+# 环形靶射击节点参数（D-01 瞄准 / D-02 环数）
+#
+# 参数依据（实测，见 交付包/射击/脚本/test_ring_detect.py 与 measure_ring_colors2.py）：
+#   仿真光照偏暗，靶纸实测 V 仅 90~130 —— 不能按"标准靶纸"的亮色设阈值
+#   1.54 m 处靶半径约 41 px，覆盖 6~10 环共 5 个环带 → 每环约 8.2 px
+#   >=8 环: |dx| <= 24.6 px    >=9 环: <= 16.4 px    10 环: <= 8.2 px
+#
+# 铁律（细则 §1.3(3)）：每个任务点只认第一次命中，所以默认偏保守 ——
+# 容差 8 px（约 1 环）+ 连续稳定 0.25 s 才开火。
+/ring_shooter_node:
+  ros__parameters:
+    # ---- 话题 ----
+    image_topic: /camera/image
+    offset_topic: /ring_target/center_offset
+    debug_topic: /ring_target/debug_image
+    cmd_vel_topic: /cmd_vel
+    fire_service: /shooter/shoot
+    shot_topic: /shooter/shot
+    status_topic: /ican_shoot/status
+    service_name: /ican_shoot/fire_ring
+
+    # ---- 视觉 ----
+    publish_debug_image: false     # 调试完记得关；开图会拖慢频率
+    debug_every: 10
+    # ROI 只取上 55%：靶在画面上部，下方彩色地面贴图会把红/黄掩码
+    # 拉成 r99 达 300~440 px 的巨块（实测 0.60 时完全失效）
+    roi_y_max_ratio: 0.55
+    min_conf: 0.55
+
+    # ---- 闭环瞄准 ----
+    tol_px: 8.0                    # ≈1 环
+    settle_sec: 0.25               # 连续稳定时长（20 Hz 控制 → 5 帧）
+    aim_gain: 0.0025               # rad/s per px（官方示例值）
+    max_angular_speed: 0.30        # 与 Nav2 vx/vy 同量级，避免甩头
+    aim_timeout_sec: 12.0
+    detect_max_age_sec: 0.6        # 超过这个时间没有新检测就认为丢靶
+
+    # ---- 射击 ----
+    dry_run: true                  # 默认真不实弹！先验证瞄准再改成 false
+    shot_wait_sec: 2.5
+    holster_settle_sec: 0.4        # 开火前停稳的时长
