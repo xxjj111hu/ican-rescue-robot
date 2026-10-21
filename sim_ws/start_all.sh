@@ -53,6 +53,10 @@ bash "$WS/stop_all.sh" || exit 1
 
 echo
 echo "=========== 1. 加载环境 ==========="
+# 强制 UTF-8 locale：VM 默认 LANG=en_US（无 UTF-8 后缀），会让 Python 按非 UTF-8
+# 读取 YAML，导致 nav2_params.yaml 里的中文注释被当成非法控制字符而解析失败。
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 export RMW_FASTRTPS_DISABLE_SHM=1
 source /opt/ros/humble/setup.bash
 [ -f /usr/share/gazebo/setup.bash ] && source /usr/share/gazebo/setup.bash

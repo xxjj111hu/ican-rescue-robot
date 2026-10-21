@@ -34,6 +34,10 @@ done
 # 禁用 FastRTPS 共享内存：否则 /initialpose、TF、AMCL 位姿偶发丢包，
 # 表现为 Nav2 间歇性"导航失败"。只设环境变量即可，不强制依赖外部 profile 文件。
 export RMW_FASTRTPS_DISABLE_SHM=1
+# 强制 UTF-8 locale：VM 默认 LANG=en_US（无 UTF-8 后缀），会让 Python 按非 UTF-8
+# 读取 YAML，导致 nav2_params.yaml 里的中文注释被当成非法控制字符而解析失败。
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 PROFILE="$HOME/.ros/fastrtps_no_shm.xml"
 if [ -f "$PROFILE" ]; then
   export FASTRTPS_DEFAULT_PROFILES_FILE="$PROFILE"
