@@ -660,7 +660,12 @@ class SequentialMissionNode(Node):
                 self.finish_mission()
 
     def publish_expected_point(self, point):
-        """告知识别节点当前要去的点位（0 = 不指定，按最近贴图自动）。"""
+        """告知识别节点当前要去的点位。
+
+        point > 0 : 指定点位，识别门控按该点位贴图算距离
+        point = 0 : 不指定，按最近贴图自动（用于独立测试识别模块）
+        point < 0 : 禁用话术上报（识别已完成，或返航途中）
+        """
         try:
             msg = Int32()
             msg.data = int(point)
@@ -743,7 +748,9 @@ class SequentialMissionNode(Node):
         # ---- 第二段：进入任务点 → 声明射击点 → 瞄准射击 → 下一点 ----
         if label.startswith("task_"):
             point = self.wp_index + 1
-            self.publish_expected_point(0)      # 已进点，恢复自动判定
+            # 已进点，本点识别已完成 → 禁用上报（-1），否则返航/转点时
+            # 经过地面贴图会再发一条话术，可能干扰裁判判定。
+            self.publish_expected_point(-1)
             self.publish_referee_target(point)
             if self.enable_shooting:
                 # 先精确对准车头，再调射击服务。

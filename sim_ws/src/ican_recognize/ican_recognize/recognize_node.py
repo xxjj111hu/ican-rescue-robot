@@ -202,6 +202,9 @@ class RecognizeNode(Node):
 
         # 任务节点指定的期望点位（0 表示不指定、按最近贴图自动）
         self._expected_point = 0
+        # 是否允许上报话术。任务节点发 -1 表示「识别已完成，别再上报」——
+        # 否则返航途中经过地面贴图会再发一条，可能干扰裁判判定。
+        self._detection_enabled = True
         self.gate_enable = bool(self.get_parameter("gate_enable").value)
         self.gate_min = float(self.get_parameter("gate_min_dist").value)
         self.gate_max = float(self.get_parameter("gate_max_dist").value)
@@ -314,12 +317,17 @@ class RecognizeNode(Node):
             return
         if pid != self._expected_point:
             self._expected_point = pid
-            if pid:
+            self._detection_enabled = pid >= 0
+            if pid > 0:
                 self.get_logger().info(
                     f"[门控] 任务节点指定当前点位 {pid}，"
                     f"门控距离改按该点位贴图计算")
-            else:
+            elif pid == 0:
                 self.get_logger().info("[门控] 取消指定点位，恢复按最近贴图判定")
+            else:
+                self.get_logger().info(
+                    "[门控] 识别已完成（expected_point=-1），暂停话术上报，"
+                    "避免返航途中经过贴图时误报")
 
     def _nearest_point(self):
         """返回 (点位编号, 距离)；无 odom 时返回 (None, None)。"""
@@ -524,7 +532,12 @@ class RecognizeNode(Node):
                 and conf >= need_conf):
             script = CLASS_SCRIPT.get(vote_cls)
             changed = vote_cls != self._last_pub_class
-            if script and (changed or (now - self._last_pub_time) >= self.min_interval):
+            # 本点位只发一次：类别变了才更正重发，否则不再周期重发。
+            # 实测原条件（changed 或超过 min_interval）让 4 个点位共发出 13 条，
+            # 同一条话术 2 秒内重复两次，可能让裁判端困惑。
+            if script and self._detection_enabled and (
+                    changed or (not self._published_this_approach
+                                and (now - self._last_pub_time) >= self.min_interval)):
                 self.referee.publish_detection(script)
                 self._last_pub_time = now
                 self._last_pub_class = vote_cls
@@ -549,7 +562,7 @@ class RecognizeNode(Node):
         # 依据《判分细则》§1.3：识别失败时该点到达分为 0、射击亦不计分；
         # 而「发错」与「不发」得分完全相同（都是 0）。因此超时时不必空手放弃，
         # 应当用当前最优猜测赌一次 —— 发对了能拿 10 分并保住该点射击分。
-        if (self.gate_enable and self._in_window
+        if (self.gate_enable and self._in_window and self._detection_enabled
                 and not self._published_this_approach
                 and not self._timeout_reported
                 and (now - self._window_enter_t) > self.detect_timeout):

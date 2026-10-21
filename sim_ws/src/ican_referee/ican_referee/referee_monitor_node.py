@@ -40,7 +40,10 @@ class RefereeMonitorNode(Node):
         self.declare_parameter("log_file",
                                os.path.expanduser("~/.ros/ican_referee/timeline.txt"))
         self.declare_parameter("echo_payload", True)
-        self.log_file = str(self.get_parameter("log_file").value)
+        # 参数里可能带 ~（launch/yaml 传入时不会自动展开），必须显式展开，
+        # 否则会写到 CWD 下名为 "~" 的目录里，事后找不到文件。
+        self.log_file = os.path.expanduser(
+            str(self.get_parameter("log_file").value))
         self.echo = bool(self.get_parameter("echo_payload").value)
 
         self.t0 = time.monotonic()
