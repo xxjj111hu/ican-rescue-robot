@@ -18,7 +18,11 @@ from pathlib import Path
 
 CLASSES = ["trapped_people", "rescue_camp", "collapsed_ruins", "damaged_vehicle", "landslide"]
 ZH = dict(zip(CLASSES, ["被困人员", "救援营地", "坍塌废墟", "受损车辆", "滑坡塌方"]))
-ASSIGN = "/opt/ican_shoot_sim/share/ican_land_sim/materials/shooting_texture_assignment.json"
+ASSIGN_CANDIDATES = [
+    "/opt/ican_shoot_sim/share/ican_land_sim/materials/shooting_texture_assignment.json",
+    r"\\wsl.localhost\Ubuntu-22.04\opt\ican_shoot_sim\share\ican_land_sim\materials\shooting_texture_assignment.json",
+    r"\\wsl$\Ubuntu-22.04\opt\ican_shoot_sim\share\ican_land_sim\materials\shooting_texture_assignment.json",
+]
 
 
 def md5(path):
@@ -49,9 +53,18 @@ def main():
     ap.add_argument("--expect-md5", default=None, help="期望的模型 md5（从主控机器取）")
     args = ap.parse_args()
 
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     print("=" * 68)
     print(" 识别环境自检")
     print("=" * 68)
+    if sys.platform.startswith("win"):
+        print("\n[注意] 当前在 Windows 下运行：")
+        print("   模型 / 脚本 两项有效；相机、贴图分配、节点进程 **必须在 WSL 里查**。")
+        print("   在 WSL 里执行： cd ~/ican-rescue-robot && python3 交付包/识别/脚本/check_recog_env.py")
 
     # 1. 模型
     print("\n[1] 模型")
@@ -73,16 +86,16 @@ def main():
             print(f"    大小 {human(p.stat().st_size)}  md5 {md5(str(p))}")
             print(f"    修改时间 {p.stat().st_mtime:.0f}")
     if not found:
-        print("  ❌ 找不到任何模型文件")
+        print("  NG 找不到任何模型文件")
     else:
         env_model = os.environ.get("ICAN_YOLO_MODEL")
         print(f"  环境变量 ICAN_YOLO_MODEL = {env_model or '(未设置)'}")
         if default_model.is_file() and pkg_model.is_file():
             same = md5(str(default_model)) == md5(str(pkg_model))
-            print(f"  节点默认模型 == 交付包模型 ? {'✅ 是' if same else '❌ 否（节点用的不是交付包里那个！）'}")
+            print(f"  节点默认模型 == 交付包模型 ? {'OK 是' if same else 'NG 否（节点用的不是交付包里那个！）'}")
         if args.expect_md5 and found:
             ok = md5(str(found[0])) == args.expect_md5.lower()
-            print(f"  与期望 md5 一致 ? {'✅' if ok else '❌ 不一致'}")
+            print(f"  与期望 md5 一致 ? {'OK' if ok else 'NG 不一致'}")
 
     # 2. 节点参数
     print("\n[2] 节点进程与参数")
@@ -103,8 +116,11 @@ def main():
 
     # 4. 当前贴图分配
     print("\n[4] 当前贴图分配（决定这一轮考什么图）")
+    assign_path = next((Path(c) for c in ASSIGN_CANDIDATES if Path(c).is_file()), None)
     try:
-        d = json.loads(Path(ASSIGN).read_text())
+        if assign_path is None:
+            raise FileNotFoundError("找不到 shooting_texture_assignment.json（Windows 下请在 WSL 里运行）")
+        d = json.loads(assign_path.read_text())
         a = d.get("assignment", {})
         for k, v in sorted(a.items()):
             print(f"  点位{k[-1]}: {v}")
@@ -118,7 +134,7 @@ def main():
         txt = acc.read_text(encoding="utf-8", errors="ignore")
         has_points = "--points" in txt
         print(f"  {acc}")
-        print(f"  支持 --points（官方 4 点位口径）? {'✅' if has_points else '❌ 旧版！会用 5 点位，数字偏低'}")
+        print(f"  支持 --points（官方 4 点位口径）? {'OK' if has_points else 'NG 旧版！会用 5 点位，数字偏低'}")
     else:
         print("  找不到 acceptance_run.py")
 
@@ -126,7 +142,7 @@ def main():
     print(" 判读")
     print("=" * 68)
     print("""  准确率低时，按下面顺序排查：
-   1. 上面的「节点默认模型 == 交付包模型」若是 ❌ → 先换模型：
+   1. 上面的「节点默认模型 == 交付包模型」若是 NG → 先换模型：
         cp 交付包/识别/模型/best.pt ~/.ros/ican_recognize/best.pt
    2. 验收脚本不支持 --points → 用仓库里最新版 acceptance_run.py
    3. 相机频率 < 10 Hz → 识别投票攒不满，准确率会掉，关掉调试图/其它程序

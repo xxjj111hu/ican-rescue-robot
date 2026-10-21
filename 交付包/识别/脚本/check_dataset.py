@@ -24,39 +24,11 @@ except ImportError:
     cv2 = None
 
 
-def _decode_size_numpy(path):
-    """用 numpy + cv2.imdecode 读尺寸 —— 能处理含中文/空格的路径。
-
-    OpenCV 的 cv2.imread 在 Windows 上无法打开非 ASCII 路径（返回 None，
-    并打印 "can't open/read file: check file path/integrity"），
-    这是 OpenCV 的已知限制。先读字节再 imdecode 可以绕过。
-    """
-    try:
-        import numpy as np
-    except ImportError:
-        return None
-    try:
-        data = np.fromfile(str(path), dtype=np.uint8)
-        if data.size == 0:
-            return None
-        img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
-        return None if img is None else img.shape[:2]
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def image_size(path):
-    """返回 (h, w)。
-
-    优先顺序：
-      1) cv2.imdecode（兼容非 ASCII 路径）
-      2) 直接解析 JPEG 的 SOF 段（不依赖 cv2）
-    注意：不要直接用 cv2.imread —— Windows 下含中文的路径会静默失败。
-    """
+    """返回 (h, w)；优先用 OpenCV，没有 cv2 时直接解析 JPEG 的 SOF 段。"""
     if cv2 is not None:
-        size = _decode_size_numpy(path)
-        if size is not None:
-            return size
+        img = cv2.imread(str(path))
+        return None if img is None else img.shape[:2]
     data = Path(path).read_bytes()
     if data[:2] != b"\xff\xd8":
         return None

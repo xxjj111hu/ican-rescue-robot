@@ -167,11 +167,9 @@ def main():
                     help="goto_pose.py 路径")
     ap.add_argument("--out", default=None,
                     help="结果文件；默认 交付包/识别/报告/acceptance_run.txt")
-    ap.add_argument("--points", default="1,2,3,4",
-                    help="参与验收的点位，逗号分隔。默认 1,2,3,4 —— 判分细则 1.1 明确任务点为 "
-                         "1->2->3->4 共 4 个，0 号点仅作视觉贴图不参与导航"
-                         "（randomize_ground_textures 日志同样确认）；要多算 0 号点用 --points 0,1,2,3,4")
-    ap.add_argument("--seed", default=None, help="仅用于写进报告标题（随机化 seed）")
+    ap.add_argument("--points", default="0,1,2,3,4",
+                    help="参与验收的点位，逗号分隔。默认 0,1,2,3,4（5 点位口径）；"
+                         "若任务书只有 4 个任务点，用 --points 1,2,3,4")
     args = ap.parse_args()
 
     try:
@@ -269,14 +267,7 @@ def main():
     collected = sum(got for _, _, _, got, _ in rows)
 
     title = "验收口径实测（{} 点位 × {} 次，听 /referee/detections）".format(len(points), args.per_point)
-    lines = ["=" * 60, title]
-    if args.standoff == "measured":
-        used = [round(math.hypot(GROUND[p][0] - MEASURED[p][0],
-                                 GROUND[p][1] - MEASURED[p][1]), 2) for p in points]
-        lines.append(f"停车位: 实测标定表（贴图中心前方 {min(used):.2f}~{max(used):.2f} m，"
-                     f"地图占据栅格已验证）")
-    else:
-        lines.append(f"停车位: 几何计算（贴图坐标 - 接近方向 × {args.dist} m）")
+    lines = ["=" * 60, title, f"停车距离: {args.dist} m"]
     if args.seed:
         lines.append(f"随机化 seed: {args.seed}")
     lines.append(f"真值来源: {truth_src}")
