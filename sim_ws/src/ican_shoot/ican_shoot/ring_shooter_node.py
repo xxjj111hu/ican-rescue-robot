@@ -91,6 +91,8 @@ class RingShooterNode(Node):
         self.declare_parameter("max_angular_speed", 0.30)
         self.declare_parameter("aim_timeout_sec", 12.0)
         self.declare_parameter("detect_max_age_sec", 0.6)
+        # 服务被调用时若还没检到靶，先等这么久再判失败（联调时任务点刚到位常见）
+        self.declare_parameter("detect_wait_sec", 5.0)
 
         # ---- 射击 ----
         self.declare_parameter("dry_run", False)
@@ -112,6 +114,7 @@ class RingShooterNode(Node):
         self.max_w = float(self.get_parameter("max_angular_speed").value)
         self.aim_timeout = float(self.get_parameter("aim_timeout_sec").value)
         self.detect_max_age = float(self.get_parameter("detect_max_age_sec").value)
+        self.detect_wait = float(self.get_parameter("detect_wait_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
         self.shot_wait = float(self.get_parameter("shot_wait_sec").value)
         self.fire_service_timeout = float(
@@ -186,6 +189,19 @@ class RingShooterNode(Node):
             self.det = det
             self.det_t = time.monotonic()
 
+        # 周期打印检测状态：联调时用它判断「没检到靶」到底是没图像、
+        # 置信度不够、还是靶不在视野里
+        if self.det_count % 30 == 0:      # 约 1 s 一次（相机约 30 Hz）
+            if det["ok"]:
+                self.get_logger().info(
+                    f"[检测] ok dx={det['dx']:+.1f}px dy={det['dy']:+.1f}px "
+                    f"r={det['radius']:.0f} conf={det['conf']:.2f} "
+                    f"色={sorted(det['parts'].keys())}")
+            else:
+                self.get_logger().info(
+                    f"[检测] 未检出（色块={sorted(det['parts'].keys())}，"
+                    f"min_conf={self.min_conf:.2f}）")
+
         if det["ok"]:
             out = PointStamped()
             out.header = msg.header
@@ -238,10 +254,28 @@ class RingShooterNode(Node):
             self._busy = False
 
     def _run_fire_sequence(self, response):
+        # 先给检测几秒钟：任务节点刚导航到位时可能刚好没有新的图像/靶还没进视野，
+        # 一调就判失败会把「还没看到」误判成「看不到」（实测联调时任务点1 就是这样）。
         det, det_t, _ = self._snapshot()
         if det is None or not det["ok"]:
+            self.get_logger().info(
+                f"暂未检测到环形靶，等待最多 {self.detect_wait:.1f}s"
+                f"（当前 det={'None' if det is None else 'ok=' + str(det['ok'])}）")
+            t_wait = time.monotonic()
+            while time.monotonic() - t_wait < self.detect_wait:
+                det, det_t, _ = self._snapshot()
+                if det is not None and det["ok"]:
+                    break
+                time.sleep(0.05)
+        if det is None or not det["ok"]:
+            detail = "从未收到相机图像" if det is None else (
+                f"有图像但未检出靶（ok=False, conf={det.get('conf', 0):.2f}"
+                f" < min_conf={self.min_conf:.2f}）"
+                if det.get("conf") is not None else "有图像但未检出靶")
             response.success = False
-            response.message = "未检测到环形靶（检查相机、光照或 roi_y_max_ratio）"
+            response.message = (
+                f"未检测到环形靶（等待 {self.detect_wait:.1f}s 后仍无有效检测；{detail}）")
+            self.get_logger().warn(response.message)
             return response
 
         self.get_logger().info("开始闭环瞄准环形靶。")

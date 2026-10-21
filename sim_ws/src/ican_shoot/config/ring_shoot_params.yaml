@@ -34,6 +34,7 @@
     max_angular_speed: 0.30        # 与 Nav2 vx/vy 同量级，避免甩头
     aim_timeout_sec: 12.0
     detect_max_age_sec: 0.6        # 超过这个时间没有新检测就认为丢靶
+    detect_wait_sec: 5.0           # 服务被调用时若还没检到靶，先等这么久再判失败
 
     # ---- 射击 ----
     dry_run: true                  # 默认真不实弹！先验证瞄准再改成 false

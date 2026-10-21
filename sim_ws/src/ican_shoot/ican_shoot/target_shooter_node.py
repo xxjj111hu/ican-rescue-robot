@@ -478,17 +478,25 @@ class TargetShooterNode(Node):
             if best_err is None or abs(bz_off) < best_err:
                 best_err = abs(bz_off)
 
-            # 选最近的水平窗口中心，并据此确定该转到哪一侧
+            # 选车头要瞄准的侧别。
+            # ⚠️ 不能用"最近窗口"：叶片每转 180° 最近窗口就换一个，side 会来回翻，
+            # 车头目标在 ±3.3° 之间反复跳，横向偏差永远收敛不了
+            # （实测停在 +107mm，而竖直偏移其实已经到过 1mm）。
+            # 改为：不在窗口时选"下一个将要到达的窗口"（沿旋转方向），稳定约 13 s；
+            # 在窗口内时直接用叶片当前所在侧（cos(psi) 的符号），与预转的侧一致。
             def _near(x, c):
                 return (x - c + math.pi) % (2 * math.pi) - math.pi
 
-            d_r = _near(psi, 0.0)         # 到右侧窗口中心的角度差
-            d_l = _near(psi, math.pi)     # 到左侧窗口中心的角度差
-            if abs(d_r) <= abs(d_l):
-                d_ang, side = d_r, +1
+            in_window = abs(bz_off) <= WHEEL_LEAF_HALF_W
+            if in_window:
+                side = +1 if math.cos(psi) > 0 else -1
+                d_ang = _near(psi, 0.0 if side > 0 else math.pi)
             else:
-                d_ang, side = d_l, -1
-            in_window = abs(d_ang) <= self.wheel_window
+                # 沿旋转方向算到两个窗口还需转多少角，取先到的那个
+                if (0.0 - psi) % (2 * math.pi) <= (math.pi - psi) % (2 * math.pi):
+                    side, d_ang = +1, _near(psi, 0.0)
+                else:
+                    side, d_ang = -1, _near(psi, math.pi)
 
             # 车头目标：直接对准该侧的叶片位置（用 ±r，避免绕圈时来回甩）
             odom, _, _ = self._snapshot()
