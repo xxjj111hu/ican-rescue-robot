@@ -430,6 +430,10 @@ class TargetShooterNode(Node):
         need_settle = max(1, int(round(self.settle_sec / self.poll_dt)))
         last = None
         best_err = None
+        it = 0
+        prev_theta = None
+        log_every = max(1, int(round(0.5 / self.poll_dt)))
+        same_count = 0
 
         while time.monotonic() - t_start < self.aim_timeout:
             st = self._get_entity("target_wheel", timeout=1.0)
@@ -464,6 +468,24 @@ class TargetShooterNode(Node):
                     f"横向偏差={lateral_err*1000:+.0f}mm 朝向误差={math.degrees(yaw_err):+.1f}°")
             if best_err is None or abs(bz_off) < best_err:
                 best_err = abs(bz_off)
+
+            # 过程日志：判断轮子到底转不转。仿真被暂停时 /clock 停走、
+            # model_states 冻结，轮角会一直不变，此时时序瞄准不可能成立。
+            if prev_theta is not None and abs(theta - prev_theta) < 1e-9:
+                same_count += 1
+            else:
+                same_count = 0
+            prev_theta = theta
+            it += 1
+            if it % log_every == 0:
+                self.get_logger().info(
+                    f"[过程] 轮角={math.degrees(theta) % 360:6.1f}° "
+                    f"叶片竖直={bz_off*1000:+5.0f}mm 横向={lateral_err*1000:+5.0f}mm "
+                    f"竖直条件={'OK' if vert_ok else '未满足'} 连续不变={same_count}")
+                if same_count >= int(round(2.0 / self.poll_dt)):
+                    self.get_logger().warn(
+                        f"轮角已连续 {same_count} 次不变 —— 仿真很可能被暂停"
+                        f"（Gazebo 里点播放键恢复），或 model_states 未更新")
 
             if vert_ok and abs(lateral_err) <= 0.012 and abs(yaw_err) <= self.yaw_tol:
                 settle += 1
