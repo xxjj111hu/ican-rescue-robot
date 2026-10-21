@@ -136,6 +136,8 @@ class TargetShooterNode(Node):
 
         # 移动靶 3 个码的顺序（左→右），用于把 id 映射到板的偏移
         self.declare_parameter("moving_code_order", "678")
+        # 任务节点在调用射击服务前发布 shoot_N，用于过滤「非当前点位」的靶位消息
+        self.declare_parameter("current_target_topic", "/referee/current_target")
 
         # ---- 时序与容差 ----
         self.declare_parameter("poll_hz", 20.0)
@@ -226,6 +228,10 @@ class TargetShooterNode(Node):
         self.create_subscription(
             String, str(self.get_parameter("recognize_target_topic").value),
             self.on_recog_target, 10, callback_group=self._io_group)
+        # 任务节点在射击前发布 shoot_N，用于过滤非当前点位的靶位消息
+        self.create_subscription(
+            String, str(self.get_parameter("current_target_topic").value),
+            self.on_current_target, 10, callback_group=self._io_group)
 
         self.fire_client = self.create_client(
             Trigger, str(self.get_parameter("fire_service").value),
@@ -252,6 +258,12 @@ class TargetShooterNode(Node):
         self.last_shot_name = ""
         self.recog_rotate = None
         self.recog_moving = None
+        # 当前点位号（来自 /referee/current_target 的 shoot_N）；None 表示未知
+        self.current_point = None
+        # 按点位存档的靶位号：point -> {"rotate": x, "moving": y}
+        # 同一 point 只认第一条（与识别节点「每点位只认第一次发布」一致），
+        # 避免后发的抖动类别覆盖正确值 —— 实测点位4 因此打成 6 号（应为 7 号）。
+        self.recog_by_point = {}
         self._busy = False
 
         self.get_logger().info(
@@ -276,16 +288,68 @@ class TargetShooterNode(Node):
             self.last_shot_name = msg.data
         self.get_logger().info(f"[/shooter/shot] {msg.data}")
 
+    def on_current_target(self, msg):
+        """任务节点声明本点射击点位（shoot_N）→ 用于过滤靶位消息。"""
+        text = (msg.data or "").strip()
+        if not text.startswith("shoot_"):
+            return
+        try:
+            point = int(text.split("_", 1)[1])
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            changed = point != self.current_point
+            self.current_point = point
+            entry = self.recog_by_point.get(point)
+        if changed:
+            self.get_logger().info(
+                f"[靶位] 当前射击点位 = {point}（{text}），"
+                f"该点位存档靶位 = {entry if entry else '尚无'}")
+
+    def _target_for_current_point(self, kind):
+        """取当前点位存档的靶位号；没有存档就退回最新值。"""
+        with self._lock:
+            cur = self.current_point
+            entry = self.recog_by_point.get(cur) if cur is not None else None
+            latest = self.recog_rotate if kind == "rotate" else self.recog_moving
+        if entry is not None and entry.get(kind) is not None:
+            return int(entry[kind])
+        return latest
+
     def on_recog_target(self, msg):
         try:
             d = json.loads(msg.data)
         except Exception:  # noqa: BLE001
             return
+        # 按点位存档，同一点位只认第一条。
+        # 实测事故：点位4 先发 damaged_vehicle(→移动靶7)，随后抖动发出
+        # landslide(→6)，后者覆盖了正确值，射击打成 6 号（首击锁定，丢 10 分）。
+        pt = d.get("point")
         with self._lock:
+            stored = False
+            if pt is not None:
+                key = int(pt)
+                if key not in self.recog_by_point:
+                    self.recog_by_point[key] = {
+                        "rotate": d.get("rotate_target"),
+                        "moving": d.get("moving_target"),
+                        "cls": d.get("class"),
+                    }
+                    stored = True
+                else:
+                    prev = self.recog_by_point[key]
+                    self.get_logger().info(
+                        f"点位 {key} 已有靶位存档（{prev.get('cls')}），"
+                        f"忽略后到的一条（{d.get('class')}）")
+            # 同时维护「最新值」作为 point 缺失时的兜底
             if d.get("rotate_target") is not None:
                 self.recog_rotate = int(d["rotate_target"])
             if d.get("moving_target") is not None:
                 self.recog_moving = int(d["moving_target"])
+        if stored:
+            self.get_logger().info(
+                f"点位 {pt} 靶位已存档：旋转靶={d.get('rotate_target')} "
+                f"移动靶={d.get('moving_target')}（{d.get('class')}）")
         self.get_logger().info(
             f"收到识别靶位：旋转靶={d.get('rotate_target')} 移动靶={d.get('moving_target')}"
             f"（{d.get('class')}）")
@@ -490,7 +554,8 @@ class TargetShooterNode(Node):
 
     def _fire_wheel(self, response):
         with self._lock:
-            target_id = self.recog_rotate or int(
+            # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
+            target_id = self._target_for_current_point("rotate") or int(
                 self.get_parameter("default_rotate_target").value)
         if not (1 <= target_id <= WHEEL_LEAF_COUNT):
             response.success = False
@@ -658,7 +723,8 @@ class TargetShooterNode(Node):
 
     def _fire_moving(self, response, name):
         with self._lock:
-            target_id = self.recog_moving or int(
+            # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
+            target_id = self._target_for_current_point("moving") or int(
                 self.get_parameter("default_moving_target").value)
         if target_id not in self.code_order:
             response.success = False

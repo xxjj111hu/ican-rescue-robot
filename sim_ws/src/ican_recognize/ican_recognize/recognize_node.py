@@ -205,6 +205,10 @@ class RecognizeNode(Node):
         # 是否允许上报话术。任务节点发 -1 表示「识别已完成，别再上报」——
         # 否则返航途中经过地面贴图会再发一条，可能干扰裁判判定。
         self._detection_enabled = True
+        # 已发布过话术的点位号。同一 pid 只发一次 —— 窗口在门控边界抖动会
+        # 反复调用 _entered_window()，不能让它解除发布锁，否则投票重来
+        # 可能投出错类别并覆盖已发布的正确靶位号（实测点位4 因此打错靶）。
+        self._published_point = None
         self.gate_enable = bool(self.get_parameter("gate_enable").value)
         self.gate_min = float(self.get_parameter("gate_min_dist").value)
         self.gate_max = float(self.get_parameter("gate_max_dist").value)
@@ -531,17 +535,19 @@ class RecognizeNode(Node):
         if (allow_publish and vote_cls is not None and vote_n >= self._vote_min
                 and conf >= need_conf):
             script = CLASS_SCRIPT.get(vote_cls)
-            changed = vote_cls != self._last_pub_class
-            # 本点位只发一次：类别变了才更正重发，否则不再周期重发。
-            # 实测原条件（changed 或超过 min_interval）让 4 个点位共发出 13 条，
-            # 同一条话术 2 秒内重复两次，可能让裁判端困惑。
-            if script and self._detection_enabled and (
-                    changed or (not self._published_this_approach
-                                and (now - self._last_pub_time) >= self.min_interval)):
+            # 每个点位只认第一次发布：
+            #   - 第一次发布时投票已够（N 帧众数 + 票数阈值），再翻说明是抖动
+            #   - 后发的错误类别会覆盖已发布的正确靶位号，导致射击打错靶（首击锁定丢分）
+            # 因此只保留 _published_point 这一个门槛；窗口抖动重置的是
+            # _published_this_approach，不影响这里的判断。
+            if (script and self._detection_enabled
+                    and self._published_point != pid
+                    and (now - self._last_pub_time) >= self.min_interval):
                 self.referee.publish_detection(script)
                 self._last_pub_time = now
                 self._last_pub_class = vote_cls
                 self._published_this_approach = True
+                self._published_point = pid
                 # 同步发布靶位信息，供射击节点使用（判分细则表 7）
                 self._publish_target(vote_cls, conf, pid, dist, "vote")
                 dist_txt = "n/a" if dist is None else f"{dist:.2f}m"
@@ -563,7 +569,7 @@ class RecognizeNode(Node):
         # 而「发错」与「不发」得分完全相同（都是 0）。因此超时时不必空手放弃，
         # 应当用当前最优猜测赌一次 —— 发对了能拿 10 分并保住该点射击分。
         if (self.gate_enable and self._in_window and self._detection_enabled
-                and not self._published_this_approach
+                and self._published_point != pid
                 and not self._timeout_reported
                 and (now - self._window_enter_t) > self.detect_timeout):
             self._timeout_reported = True
@@ -580,6 +586,7 @@ class RecognizeNode(Node):
                 self._last_pub_time = now
                 self._last_pub_class = guess_cls
                 self._published_this_approach = True
+                self._published_point = pid
                 # 兜底发布也要给出靶位号：这一发是赌的，但靶位号仍是查表得出的
                 self._publish_target(guess_cls, guess_conf, pid, dist, f"forced:{guess_src}")
                 self.get_logger().warn(
