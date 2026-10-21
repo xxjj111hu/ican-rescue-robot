@@ -37,9 +37,11 @@
     aim_gain: 0.004
     max_angular_speed: 0.30        # 与 Nav2 vx/vy 同量级，避免甩头
     # 最小有效角速度：实测低于约 0.1 rad/s 的指令底盘不响应，
-    # 小误差时按符号补足到该值，避免原地等待
-    min_angular_speed: 0.10
-    aim_timeout_sec: 20.0
+    # 小误差时按符号补足到该值，避免原地等待。
+    # 但环靶的 8px 容差只相当于 0.5 度转角，kick 太大会过冲振荡 ——
+    # 实测 0.10 时瞄准耗时 16.9 s（预算 20 s，余量仅 3 s），降到 0.06。
+    min_angular_speed: 0.06
+    aim_timeout_sec: 25.0
     detect_max_age_sec: 0.6        # 超过这个时间没有新检测就认为丢靶
     detect_wait_sec: 5.0           # 服务被调用时若还没检到靶，先等这么久再判失败
 
