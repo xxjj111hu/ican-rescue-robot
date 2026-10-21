@@ -157,11 +157,14 @@ controller_server:
       vx_std: 0.45
       vy_std: 0.55
       wz_std: 0.9
-      # [SpeedLimit Task12] per-axis cap 0.35 => combined linear max sqrt(0.35^2+0.35^2)=0.495 < 0.5 m/s
-      vx_max: 0.35
-      vx_min: -0.35
-      vy_max: 0.35
-      vy_min: -0.35
+      # [SpeedLimit] 细则 §1.1(4)：移动速度 <= 0.5 m/s，超限锁定该任务后续计分。
+# 麦轮可横移，实际线速是 vx 与 vy 的矢量叠加，所以单轴上限必须比 0.5 低很多。
+# 原值 0.35 => sqrt(0.35^2+0.35^2)=0.495，余量仅 1%，裁判测出 0.50 即视为超限。
+# 现值 0.30 => sqrt(0.30^2+0.30^2)=0.4243，余量 15%。
+      vx_max: 0.30
+      vx_min: -0.30
+      vy_max: 0.30
+      vy_min: -0.30
       wz_max: 2.0
       ax_max: 2.0
       ax_min: -2.0
@@ -380,8 +383,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.35, 0.35, 2.0]
-    min_velocity: [-0.35, -0.35, -2.0]
+    max_velocity: [0.30, 0.30, 2.0]
+    min_velocity: [-0.30, -0.30, -2.0]
     max_accel: [3.0, 3.5, 6.0]
     max_decel: [-3.0, -3.5, -6.0]
     odom_topic: "odom"

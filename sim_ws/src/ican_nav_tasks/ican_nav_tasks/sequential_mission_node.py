@@ -41,7 +41,7 @@ from rclpy.qos import (
     ReliabilityPolicy,
     qos_profile_sensor_data,
 )
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
 
 
@@ -131,6 +131,9 @@ class SequentialMissionNode(Node):
         self.declare_parameter("event_topic", "/mission/event")
         self.declare_parameter("navigate_action", "/navigate_to_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        # 告知识别节点「当前去几号点」，避免其距离门控被邻近贴图抢走
+        self.declare_parameter("expected_point_topic",
+                               "/ican_recognize/expected_point")
         self.declare_parameter(
             "result_file",
             os.path.expanduser("~/.ros/ican_nav_tasks/mission_result.txt"),
@@ -187,6 +190,9 @@ class SequentialMissionNode(Node):
         }
         self.cmd_pub = self.create_publisher(
             Twist, str(self.get_parameter("cmd_vel_topic").value), 10
+        )
+        self.expected_point_pub = self.create_publisher(
+            Int32, str(self.get_parameter("expected_point_topic").value), 10
         )
         event_qos = QoSProfile(depth=10)
         event_qos.reliability = ReliabilityPolicy.RELIABLE
@@ -640,6 +646,16 @@ class SequentialMissionNode(Node):
             else:
                 self.finish_mission()
 
+    def publish_expected_point(self, point):
+        """告知识别节点当前要去的点位（0 = 不指定，按最近贴图自动）。"""
+        try:
+            msg = Int32()
+            msg.data = int(point)
+            self.expected_point_pub.publish(msg)
+            self.get_logger().info(f"[识别] 告知识别节点当前点位 = {point}")
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"发布 expected_point 失败: {exc}")
+
     def go_to_standoff(self):
         """第一段：导航到识别位（贴图前方约 0.70 m）。没有配置识别位则直接进点位。"""
         i = self.wp_index
@@ -650,6 +666,9 @@ class SequentialMissionNode(Node):
             self.last_script = None
             self.recog_state = None
             self.goal_retries = 0
+            # 先告诉识别节点"我要去第 i+1 个点"，否则它的距离门控可能
+            # 因为邻近贴图更近而认为在别的点位窗口，导致本点话术发不出去
+            self.publish_expected_point(i + 1)
             if not self.send_goal(x, y, yaw, f"task_{i + 1}:standoff"):
                 self.get_logger().warn("Nav2 action server 未就绪，回到等待重发。")
                 self.state = "WAITING"
@@ -711,6 +730,7 @@ class SequentialMissionNode(Node):
         # ---- 第二段：进入任务点 → 声明射击点 → 瞄准射击 → 下一点 ----
         if label.startswith("task_"):
             point = self.wp_index + 1
+            self.publish_expected_point(0)      # 已进点，恢复自动判定
             self.publish_referee_target(point)
             if self.enable_shooting:
                 # 先精确对准车头，再调射击服务。

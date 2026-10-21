@@ -35,7 +35,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 
 from ican_recognize.scripts_table import (
     CLASS_ORDER,
@@ -123,6 +123,10 @@ class RecognizeNode(Node):
         self.declare_parameter("gate_enable", True)
         self.declare_parameter("gate_min_dist", 0.60)
         self.declare_parameter("gate_max_dist", 0.90)
+        # 任务节点可指定「当前去几号点」，避免门控被邻近点位贴图抢走
+        # （实测 standoff 2/3/4 到点位1贴图比到本点位更近，0=按最近贴图自动）
+        self.declare_parameter("expected_point_topic",
+                               "/ican_recognize/expected_point")
         self.declare_parameter("detect_timeout_sec", 5.0)
         # 超时时强制发布当前最优猜测。
         # 依据：发错与不发都是 0 分，但发对了能拿 10 分并保住该点射击分，
@@ -187,6 +191,8 @@ class RecognizeNode(Node):
         )
         self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
 
+        # 任务节点指定的期望点位（0 表示不指定、按最近贴图自动）
+        self._expected_point = 0
         self.gate_enable = bool(self.get_parameter("gate_enable").value)
         self.gate_min = float(self.get_parameter("gate_min_dist").value)
         self.gate_max = float(self.get_parameter("gate_max_dist").value)
@@ -204,6 +210,10 @@ class RecognizeNode(Node):
         # 本次进窗以来见过的最高置信度检测（不论是否过阈值），用于超时兜底赌一次
         self._best_seen = (None, 0.0)
 
+        # 任务节点指定当前点位，避免门控被邻近贴图抢走（见 on_expected_point）
+        self.create_subscription(
+            Int32, str(self.get_parameter("expected_point_topic").value),
+            self.on_expected_point, 10)
         if self.gate_enable:
             self.create_subscription(Odometry, odom_topic, self.on_odom, 10)
         else:
@@ -287,11 +297,32 @@ class RecognizeNode(Node):
         p = msg.pose.pose.position
         self._odom = (float(p.x), float(p.y))
 
+    def on_expected_point(self, msg):
+        """任务节点告知当前要去的点位；0 表示不指定。"""
+        try:
+            pid = int(msg.data)
+        except Exception:  # noqa: BLE001
+            return
+        if pid != self._expected_point:
+            self._expected_point = pid
+            if pid:
+                self.get_logger().info(
+                    f"[门控] 任务节点指定当前点位 {pid}，"
+                    f"门控距离改按该点位贴图计算")
+            else:
+                self.get_logger().info("[门控] 取消指定点位，恢复按最近贴图判定")
+
     def _nearest_point(self):
         """返回 (点位编号, 距离)；无 odom 时返回 (None, None)。"""
         if self._odom is None:
             return None, None
         x, y = self._odom
+        # 任务节点指定了点位就只算那一个：否则会被"离得更近的邻近贴图"抢走，
+        # 导致该点位永远进不了识别窗口（实测点位 3 就是这样丢的）。
+        if self._expected_point and self._expected_point in GROUND_POINTS:
+            gx, gy = GROUND_POINTS[self._expected_point]
+            d = ((x - gx) ** 2 + (y - gy) ** 2) ** 0.5
+            return self._expected_point, d
         best_id, best_d = None, float("inf")
         for pid, (gx, gy) in GROUND_POINTS.items():
             d = ((x - gx) ** 2 + (y - gy) ** 2) ** 0.5
