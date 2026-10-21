@@ -121,11 +121,13 @@ class SequentialMissionNode(Node):
         self.declare_parameter("shoot_moving4_service", "/ican_shoot/fire_moving_4")
         # 单个点的射击预算：射击节点内部瞄准最长 20 s，再加服务与开火开销
         # 环靶瞄准已延长到 20 s，服务预算相应放宽
-        # 实测单次瞄准最长 16.9 s，22 s 足够；缩短可减少全程耗时
-        # （官方：同分时按比赛用时排名，用时少者靠前）
-        self.declare_parameter("shoot_timeout_sec", 22.0)
+        # 必须大于射击节点的 aim_timeout(28 s) + 其等待余量(4 s) = 32 s，
+        # 否则任务节点会先超时、重试又撞上仍占着互斥服务组的上一次回调，
+        # 造成连锁 TIMEOUT（实测 22 s 时点位2/3/4 全部失败）。
+        self.declare_parameter("shoot_timeout_sec", 36.0)
         # 官方 §1.3(3)：未命中允许多次射击，直至命中一次为止
-        self.declare_parameter("max_shoot_attempts", 3)
+        # 取 2 次：给一次补救机会，同时把最坏耗时控制在 2x36=72 s
+        self.declare_parameter("max_shoot_attempts", 2)
         # 进任务点后先用 odom 闭环把车头对准到航点 yaw，再交给射击节点
         # 实测角速度指令只有部分生效（9.4°→1.5° 用了 10 s，约 0.8°/s），
         # 所以提高增益与限幅、放宽超时、并收紧最终容差。
@@ -133,6 +135,8 @@ class SequentialMissionNode(Node):
         self.declare_parameter("align_yaw_timeout_sec", 16.0)
         self.declare_parameter("align_yaw_gain", 2.5)
         self.declare_parameter("align_yaw_max_rate", 0.35)
+        # 最小有效角速度：低于此值底盘不响应，会让残差卡在容差外
+        self.declare_parameter("align_yaw_min_rate", 0.15)
         self.declare_parameter("event_topic", "/mission/event")
         self.declare_parameter("navigate_action", "/navigate_to_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
@@ -175,6 +179,8 @@ class SequentialMissionNode(Node):
         self.align_yaw_gain = float(self.get_parameter("align_yaw_gain").value)
         self.align_yaw_max_rate = float(
             self.get_parameter("align_yaw_max_rate").value)
+        self.align_yaw_min_rate = float(
+            self.get_parameter("align_yaw_min_rate").value)
         self.result_file = self.get_parameter("result_file").value
 
         # 接口
@@ -800,10 +806,16 @@ class SequentialMissionNode(Node):
                 return
             if now - self.align_t0 < self.align_yaw_timeout:
                 tw = Twist()
-                # 角度环用比例控制，限幅 0.25 rad/s（远低于 0.5 m/s 的线速等价量）
-                tw.angular.z = clamp(self.align_yaw_gain * err,
-                                     -self.align_yaw_max_rate,
-                                     self.align_yaw_max_rate)
+                # 角度环用比例控制，限幅远低于 0.5 m/s 的线速等价量
+                cmd = clamp(self.align_yaw_gain * err,
+                            -self.align_yaw_max_rate, self.align_yaw_max_rate)
+                # 最小有效量：实测底盘对约 0.1 rad/s 以下的角速度不响应。
+                # 残差剩 0.6° = 0.0105 rad 时比例指令只有 0.026 rad/s，
+                # 车根本不动，永远收敛不进 0.4° 容差（点位3/4 实测超时）。
+                if abs(cmd) < self.align_yaw_min_rate:
+                    cmd = (self.align_yaw_min_rate if err > 0
+                           else -self.align_yaw_min_rate)
+                tw.angular.z = cmd
                 self.cmd_pub.publish(tw)
                 return
             self.get_logger().warn(

@@ -532,8 +532,13 @@ class TargetShooterNode(Node):
 
         th = threading.Thread(target=_worker, daemon=True, name="aim_worker")
         th.start()
-        if not done.wait(timeout=self.aim_timeout + 20.0):
-            self.get_logger().warn("瞄准线程超时未结束，强制返回")
+        # 只比 aim_timeout 多留一点余量：必须小于任务节点的 shoot_timeout_sec，
+        # 否则任务节点先超时、重试又撞上还占着互斥服务组的本次回调，连锁超时。
+        # （实测 aim_timeout+20 = 48 s 远超任务端的 22 s，导致 3 个点位全 TIMEOUT）
+        wait_s = self.aim_timeout + 4.0
+        if not done.wait(timeout=wait_s):
+            self.get_logger().warn(
+                f"瞄准线程 {wait_s:.0f}s 未结束，强制返回（工作异常）")
 
     # ---------------- D-03：旋转靶 ----------------
     def on_fire_wheel(self, _req, response):
