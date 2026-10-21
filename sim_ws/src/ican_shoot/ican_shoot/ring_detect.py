@@ -66,6 +66,10 @@ OUTER_COLOR = "red"     # 最外环，用来量靶半径
 CONCENTRIC_TOL = 12.0
 # 靶半径合理范围（实测 1.54 m 处半径约 41 px；留出靠近/远离的余量）
 RADIUS_RANGE = (8.0, 70.0)
+# 是否要求检出内环色（蓝/黄）才认为有效。
+# 真十环靶必然同时有红环(6环)与蓝环(8环)；实测联调时画面右侧某个纯红物体
+# 被误检成靶（r=47、dx=+378px、只有 'red'），而真靶检出的是 ['red','blue']。
+REQUIRE_INNER_COLOR = True
 
 
 def color_mask(hsv: np.ndarray, color: str) -> np.ndarray:
@@ -87,15 +91,17 @@ def blob_stats(mask: np.ndarray, min_pixels: int):
     return cx, cy, int(n), float(np.percentile(d, 99))
 
 
-def detect_ring(bgr: np.ndarray, roi_y_max_ratio: float = 0.55,
+def detect_ring(bgr: np.ndarray, roi_y_max_ratio: float = 0.53,
                 max_radius: float = RADIUS_RANGE[1]):
     """检测环形靶。
 
     返回 dict: ok / x / y / dx / dy / radius / conf / parts
     dx>0 表示靶心在画面中心右侧，需要向右（顺时针）转。
 
-    ROI 默认只取上 55%：靶在画面上部，而下方彩色地面贴图会把红/黄掩码
+    ROI 默认只取上 53%：靶在画面上部，而下方彩色地面贴图会把红/黄掩码
     拉成 r99 达 300~440 px 的巨块，必须排除（实测 0.60H 时全部失效）。
+    0.55 这个值不够低 —— 蓝环会被地面污染掉，导致真靶只剩红色检出，
+    conf 只有 0.85，且纯红物体也能通过检查。收到 0.53 后三色齐全、conf=1.00。
     """
     h, w = bgr.shape[:2]
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -117,6 +123,14 @@ def detect_ring(bgr: np.ndarray, roi_y_max_ratio: float = 0.55,
     if not raw:
         return {"ok": False, "x": None, "y": None, "dx": None, "dy": None,
                 "radius": None, "conf": 0.0, "parts": raw}
+
+    # 假阳性过滤：真十环靶必然同时有红环(6环)与蓝环(8环)。
+    # 实测联调时画面右侧某个纯红物体被误检成靶（r=47、dx=+378px、只有 'red'），
+    # 而真靶检出的是 ['red','blue']。要求至少有一个内环色可显著排除这类误检。
+    if REQUIRE_INNER_COLOR and not ({"blue", "yellow"} & set(raw.keys())):
+        return {"ok": False, "x": None, "y": None, "dx": None, "dy": None,
+                "radius": None, "conf": 0.0, "parts": raw,
+                "reject": "只有外环色、缺蓝/黄内环 -> 判为误检"}
 
     # 以"最外环优先"的顺序选锚点，再只接受与锚点同心的颜色
     anchor = None

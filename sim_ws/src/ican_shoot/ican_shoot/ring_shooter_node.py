@@ -81,7 +81,7 @@ class RingShooterNode(Node):
         # ---- 视觉 ----
         self.declare_parameter("publish_debug_image", False)
         self.declare_parameter("debug_every", 10)
-        self.declare_parameter("roi_y_max_ratio", 0.55)
+        self.declare_parameter("roi_y_max_ratio", 0.53)
         self.declare_parameter("min_conf", 0.55)
 
         # ---- 闭环瞄准 ----
