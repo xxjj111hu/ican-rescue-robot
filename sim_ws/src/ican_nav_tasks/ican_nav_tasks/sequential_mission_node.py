@@ -41,6 +41,7 @@ from rclpy.qos import (
     ReliabilityPolicy,
     qos_profile_sensor_data,
 )
+from ican_referee.referee_comm import RefereeComm
 from std_msgs.msg import Int32, String
 from std_srvs.srv import Trigger
 
@@ -206,23 +207,21 @@ class SequentialMissionNode(Node):
         self.event_pub = self.create_publisher(
             String, str(self.get_parameter("event_topic").value), event_qos
         )
-        # 裁判系统话题（判分要求，QoS RELIABLE）
-        self.target_pub = self.create_publisher(
-            String, str(self.get_parameter("referee_target_topic").value), event_qos
-        )
-        self.finish_pub = self.create_publisher(
-            String, str(self.get_parameter("referee_finish_topic").value), event_qos
-        )
-        # 订阅识别话术与识别状态，用于「停在识别位后等话术」
+        # 裁判系统话题统一由 ican_referee 模块管理（E-01）：
+        # 话题名/类型/QoS/载荷格式都有单一事实来源，且发前会做格式校验
         self.got_script = False
         self.last_script = None
         self.recog_state = None
-        self.create_subscription(
-            String,
-            str(self.get_parameter("detections_topic").value),
-            self.on_detection,
-            event_qos,
+        self.referee = RefereeComm(
+            self,
+            detections_topic=str(self.get_parameter("detections_topic").value),
+            current_target_topic=str(
+                self.get_parameter("referee_target_topic").value),
+            finish_topic=str(self.get_parameter("referee_finish_topic").value),
+            finish_message=str(self.get_parameter("finish_message").value),
+            enable_subscribe_detections=True,
         )
+        self.referee.on_script = self.on_detection_text
         self.create_subscription(
             String,
             str(self.get_parameter("recognize_status_topic").value),
@@ -357,9 +356,12 @@ class SequentialMissionNode(Node):
         }
 
     # ---------------- 识别回调 ----------------
-    def on_detection(self, msg):
-        """收到识别话术（说明识别模块已经发布过结果）。"""
-        text = msg.data.strip()
+    def on_detection_text(self, text):
+        """收到识别话术（说明识别模块已经发布过结果）。
+
+        由 RefereeComm.on_script 回调，参数已是解包后的文本。
+        """
+        text = str(text).strip()
         if not text:
             return
         if not self.got_script:
@@ -382,19 +384,23 @@ class SequentialMissionNode(Node):
             self.got_script = True
 
     def publish_referee_target(self, index):
-        """射击前声明当前点位：shoot_1 … shoot_4（判分硬要求）。"""
-        m = String()
-        m.data = f"shoot_{index}"
-        self.target_pub.publish(m)
-        self.publish_event(f"shoot:{index}")
-        self.get_logger().info(f"[裁判] 已发布 /referee/current_target = {m.data}")
+        """射击前声明当前点位：shoot_1 … shoot_4（判分硬要求）。
+
+        实际发送与格式校验交给 ican_referee.RefereeComm。
+        """
+        try:
+            self.referee.declare_shooting(index)
+            self.publish_event(f"shoot:{index}")
+        except Exception as exc:  # noqa: BLE001
+            # 声明发不出去不能中断全程：记录后继续（到达分已在手，射击仍可计分）
+            self.get_logger().error(f"[裁判] 射击声明发送失败: {exc}")
 
     def publish_referee_finish(self):
-        """返航停车完成后发布完成声明。"""
-        m = String()
-        m.data = str(self.get_parameter("finish_message").value)
-        self.finish_pub.publish(m)
-        self.get_logger().info(f"[裁判] 已发布 /referee/finish = {m.data}")
+        """返航停车完成后发布完成声明（只结算一次）。"""
+        try:
+            self.referee.declare_finish()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"[裁判] 完成声明发送失败: {exc}")
 
     def publish_event(self, text):
         m = String()

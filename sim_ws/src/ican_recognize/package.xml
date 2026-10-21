@@ -12,6 +12,8 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <!-- 裁判通信模块（E-01）：话题/载荷的单一事实来源 -->
+  <exec_depend>ican_referee</exec_depend>
   <!-- 距离门控订阅 /odom，需要 nav_msgs -->
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

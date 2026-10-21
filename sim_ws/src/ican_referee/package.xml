@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ican_referee</name>
+  <version>0.1.0</version>
+  <description>iCAN 陆地清障裁判通信模块（E-01）：集中管理 /referee/* 与 /shooter/shot 的收发、载荷校验与接口自检</description>
+  <maintainer email="team@ican.local">iCAN Rescue Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

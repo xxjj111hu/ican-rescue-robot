@@ -13,6 +13,8 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <!-- 裁判通信模块（E-01）：话题/载荷的单一事实来源 -->
+  <exec_depend>ican_referee</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>ican_example_navigation</exec_depend>
   <exec_depend>ican_shoot_sim</exec_depend>

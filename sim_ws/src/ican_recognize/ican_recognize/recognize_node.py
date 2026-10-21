@@ -35,6 +35,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from ican_referee.referee_comm import RefereeComm
 from std_msgs.msg import Int32, String
 
 from ican_recognize.scripts_table import (
@@ -182,7 +183,15 @@ class RecognizeNode(Node):
         det_qos = QoSProfile(depth=10)
         det_qos.reliability = ReliabilityPolicy.RELIABLE
         det_qos.durability = DurabilityPolicy.VOLATILE
-        self.det_pub = self.create_publisher(String, det_topic, det_qos)
+        # 裁判话术统一由 ican_referee 模块发送（E-01）：
+        # 话题名/QoS/格式校验都有单一事实来源
+        self.referee = RefereeComm(
+            self,
+            detections_topic=det_topic,
+            enable_subscribe_detections=False,
+            enable_subscribe_shot=False,
+            logger_prefix="[裁判]",
+        )
         self.result_pub = self.create_publisher(String, result_topic, 10)
         self.status_pub = self.create_publisher(String, status_topic, det_qos)
         self.target_pub = self.create_publisher(String, target_topic, det_qos)
@@ -516,9 +525,7 @@ class RecognizeNode(Node):
             script = CLASS_SCRIPT.get(vote_cls)
             changed = vote_cls != self._last_pub_class
             if script and (changed or (now - self._last_pub_time) >= self.min_interval):
-                out = String()
-                out.data = script
-                self.det_pub.publish(out)
+                self.referee.publish_detection(script)
                 self._last_pub_time = now
                 self._last_pub_class = vote_cls
                 self._published_this_approach = True
@@ -556,9 +563,7 @@ class RecognizeNode(Node):
                 guess_cls, guess_conf, guess_src = self._best_seen[0], self._best_seen[1], "best_frame"
 
             if self.force_publish and guess_cls is not None and CLASS_SCRIPT.get(guess_cls):
-                out = String()
-                out.data = CLASS_SCRIPT[guess_cls]
-                self.det_pub.publish(out)
+                self.referee.publish_detection(CLASS_SCRIPT[guess_cls])
                 self._last_pub_time = now
                 self._last_pub_class = guess_cls
                 self._published_this_approach = True
