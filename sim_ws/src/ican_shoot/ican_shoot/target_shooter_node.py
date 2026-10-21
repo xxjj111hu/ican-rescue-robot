@@ -87,6 +87,21 @@ def yaw_from_quat(z, w):
     return 2.0 * math.atan2(z, w)
 
 
+class _Resp:
+    """占位响应对象：瞄准线程往里写结果，服务回调再拷到真正的 response。
+
+    为什么要绕这一层：在 ROS 服务回调里直接调另一个服务（read state / shoot）
+    会遇到 rclpy 的重入问题（实测 future 永远不完成、静默 20 s 后超时）。
+    改在普通线程里跑，服务回调只等结果，问题消失。
+    """
+
+    __slots__ = ("success", "message")
+
+    def __init__(self):
+        self.success = False
+        self.message = ""
+
+
 class TargetShooterNode(Node):
     def __init__(self):
         super().__init__("target_shooter_node")
@@ -236,26 +251,47 @@ class TargetShooterNode(Node):
         self.cmd_pub.publish(Twist())
 
     # ---------------- Gazebo 位姿读取 ----------------
-    def _get_entity(self, name, timeout=3.0):
-        if not self.state_client.wait_for_service(timeout_sec=timeout):
+    def _get_entity(self, name, timeout=2.0):
+        """读取实体状态。带明确的诊断日志（不再静默返回 None）。"""
+        try:
+            ready = self.state_client.service_is_ready()
+            if not ready:
+                ready = self.state_client.wait_for_service(timeout_sec=timeout)
+            if not ready:
+                self.get_logger().warn(
+                    f"[诊断] 服务 {self.state_client.srv_name} 不可用"
+                    f"（service_is_ready=False，wait_for_service {timeout:.1f}s 超时）")
+                return None
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"[诊断] wait_for_service 异常: {exc}")
             return None
+
         req = GetEntityState.Request()
         req.name = name
+        req.reference_frame = ""
         try:
             fut = self.state_client.call_async(req)
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn(f"读取 {name} 状态失败: {exc}")
+            self.get_logger().warn(f"[诊断] call_async 失败: {exc}")
             return None
+
         t0 = time.monotonic()
         while not fut.done() and (time.monotonic() - t0) < timeout:
-            time.sleep(0.01)
+            time.sleep(0.005)
         if not fut.done():
+            self.get_logger().warn(
+                f"[诊断] {name} 的 get_entity_state 请求 {timeout:.1f}s 内无响应")
             return None
         try:
             res = fut.result()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f"[诊断] 取响应失败: {exc}")
             return None
-        if res is None or not res.success:
+        if res is None:
+            self.get_logger().warn("[诊断] 响应为 None")
+            return None
+        if not res.success:
+            self.get_logger().warn(f"[诊断] {name} 查询 success=False")
             return None
         return res.state
 
@@ -320,6 +356,29 @@ class TargetShooterNode(Node):
             time.sleep(0.03)
         return True, "已发出发射指令（/shooter/shot 确认延迟，属已知现象）"
 
+    # ---------------- 线程化执行（避开 rclpy 回调重入） ----------------
+    def _run_in_thread(self, work):
+        """在普通线程里执行 work()，最多等 aim_timeout + 20 s。
+
+        work 应往临时响应对象里写 success/message（用 _Resp）。
+        关键：不要在 ROS 回调上下文里直接调服务，否则 future 不会完成。
+        """
+        done = threading.Event()
+
+        def _worker():
+            try:
+                work()
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(f"瞄准线程异常: {type(exc).__name__}: {exc}")
+            finally:
+                self._stop()
+                done.set()
+
+        th = threading.Thread(target=_worker, daemon=True, name="aim_worker")
+        th.start()
+        if not done.wait(timeout=self.aim_timeout + 20.0):
+            self.get_logger().warn("瞄准线程超时未结束，强制返回")
+
     # ---------------- D-03：旋转靶 ----------------
     def on_fire_wheel(self, _req, response):
         if self._busy:
@@ -328,9 +387,13 @@ class TargetShooterNode(Node):
             return response
         self._busy = True
         try:
-            return self._fire_wheel(response)
+            tmp = _Resp()
+            self._run_in_thread(lambda: self._fire_wheel(tmp))
+            response.success = tmp.success
+            response.message = tmp.message
+            self.get_logger().info(f"[fire_wheel] {response.message}")
+            return response
         finally:
-            self._stop()
             self._busy = False
 
     def _fire_wheel(self, response):
@@ -437,9 +500,13 @@ class TargetShooterNode(Node):
             return response
         self._busy = True
         try:
-            return self._fire_moving(response, name)
+            tmp = _Resp()
+            self._run_in_thread(lambda: self._fire_moving(tmp, name))
+            response.success = tmp.success
+            response.message = tmp.message
+            self.get_logger().info(f"[fire_moving {name}] {response.message}")
+            return response
         finally:
-            self._stop()
             self._busy = False
 
     def _fire_moving(self, response, name):
