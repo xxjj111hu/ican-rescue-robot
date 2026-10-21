@@ -14,7 +14,7 @@
 /target_shooter_node:
   ros__parameters:
     # ---- 话题/服务 ----
-    gazebo_state_service: /gazebo/get_entity_state
+    model_states_topic: /gazebo/model_states   # 靶位姿态来源（话题比 get_entity_state 服务可靠）
     cmd_vel_topic: /cmd_vel
     odom_topic: /odom
     fire_service: /shooter/shoot

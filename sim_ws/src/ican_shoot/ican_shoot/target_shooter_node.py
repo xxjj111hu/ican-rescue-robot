@@ -45,7 +45,7 @@ import threading
 import time
 
 import rclpy
-from gazebo_msgs.srv import GetEntityState
+from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
@@ -87,6 +87,15 @@ def yaw_from_quat(z, w):
     return 2.0 * math.atan2(z, w)
 
 
+class _Ent:
+    """轻量包装，让调用方继续用 st.pose.position / st.pose.orientation。"""
+
+    __slots__ = ("pose",)
+
+    def __init__(self, pose):
+        self.pose = pose
+
+
 class _Resp:
     """占位响应对象：瞄准线程往里写结果，服务回调再拷到真正的 response。
 
@@ -106,7 +115,7 @@ class TargetShooterNode(Node):
     def __init__(self):
         super().__init__("target_shooter_node")
 
-        self.declare_parameter("gazebo_state_service", "/gazebo/get_entity_state")
+        self.declare_parameter("model_states_topic", "/gazebo/model_states")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("fire_service", "/shooter/shoot")
@@ -171,14 +180,16 @@ class TargetShooterNode(Node):
         self.create_subscription(
             Odometry, str(self.get_parameter("odom_topic").value),
             self.on_odom, qos_profile_sensor_data)
+        # 靶位姿态：订阅 model_states（比 get_entity_state 服务可靠，见 on_model_states 注释）
+        self.create_subscription(
+            ModelStates, str(self.get_parameter("model_states_topic").value),
+            self.on_model_states, 10)
         self.create_subscription(
             String, str(self.get_parameter("shot_topic").value), self.on_shot, 10)
         self.create_subscription(
             String, str(self.get_parameter("recognize_target_topic").value),
             self.on_recog_target, 10)
 
-        self.state_client = self.create_client(
-            GetEntityState, str(self.get_parameter("gazebo_state_service").value))
         self.fire_client = self.create_client(
             Trigger, str(self.get_parameter("fire_service").value))
 
@@ -194,6 +205,8 @@ class TargetShooterNode(Node):
         self._lock = threading.Lock()
         self.odom = None            # {"x","y","yaw"}
         self.odom_t = 0.0
+        self._models = {}           # name -> Pose（来自 /gazebo/model_states）
+        self._models_t = 0.0
         self.shot_msgs = 0
         self.last_shot_name = ""
         self.recog_rotate = None
@@ -250,50 +263,42 @@ class TargetShooterNode(Node):
     def _stop(self):
         self.cmd_pub.publish(Twist())
 
-    # ---------------- Gazebo 位姿读取 ----------------
-    def _get_entity(self, name, timeout=2.0):
-        """读取实体状态。带明确的诊断日志（不再静默返回 None）。"""
+    # ---------------- 靶位姿态：订阅 /gazebo/model_states ----------------
+    # 为什么不用 /gazebo/get_entity_state 服务：
+    # 实测该服务在程序里调用时请求发得出去、响应永远回不来（日志里连续 17 次
+    # 「1.0s 内无响应」），而命令行调同一个服务却正常；/gazebo/get_model_list
+    # 更是直接卡死。改用持续发布的话题，既可靠又能连续跟踪轮子转角。
+    def on_model_states(self, msg):
         try:
-            ready = self.state_client.service_is_ready()
-            if not ready:
-                ready = self.state_client.wait_for_service(timeout_sec=timeout)
-            if not ready:
-                self.get_logger().warn(
-                    f"[诊断] 服务 {self.state_client.srv_name} 不可用"
-                    f"（service_is_ready=False，wait_for_service {timeout:.1f}s 超时）")
-                return None
+            table = {}
+            for nm, pose in zip(msg.name, msg.pose):
+                table[nm] = pose
+            with self._lock:
+                self._models = table
+                self._models_t = time.monotonic()
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn(f"[诊断] wait_for_service 异常: {exc}")
-            return None
+            self.get_logger().warn(f"解析 model_states 失败: {exc}")
 
-        req = GetEntityState.Request()
-        req.name = name
-        req.reference_frame = ""
-        try:
-            fut = self.state_client.call_async(req)
-        except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn(f"[诊断] call_async 失败: {exc}")
-            return None
+    def _have_models(self):
+        with self._lock:
+            return self._models_t > 0.0
 
-        t0 = time.monotonic()
-        while not fut.done() and (time.monotonic() - t0) < timeout:
-            time.sleep(0.005)
-        if not fut.done():
+    def _get_entity(self, name, timeout=1.0):
+        """从缓存的 model_states 里取位姿；最多等 timeout 秒等首帧。"""
+        if self._models_t == 0.0:
+            t0 = time.monotonic()
+            while self._models_t == 0.0 and (time.monotonic() - t0) < timeout:
+                time.sleep(0.01)
+        with self._lock:
+            pose = self._models.get(name)
+            age = time.monotonic() - self._models_t if self._models_t else 1e9
+        if pose is None:
             self.get_logger().warn(
-                f"[诊断] {name} 的 get_entity_state 请求 {timeout:.1f}s 内无响应")
+                f"[诊断] model_states 里没有 {name}"
+                f"（已知模型: {sorted(self._models.keys())[:8]}...），"
+                f"该话题年龄 {age:.1f}s")
             return None
-        try:
-            res = fut.result()
-        except Exception as exc:  # noqa: BLE001
-            self.get_logger().warn(f"[诊断] 取响应失败: {exc}")
-            return None
-        if res is None:
-            self.get_logger().warn("[诊断] 响应为 None")
-            return None
-        if not res.success:
-            self.get_logger().warn(f"[诊断] {name} 查询 success=False")
-            return None
-        return res.state
+        return _Ent(pose)
 
     # ---------------- 车头转向（odom 闭环） ----------------
     def _rotate_to_yaw(self, target_yaw, timeout=6.0):
