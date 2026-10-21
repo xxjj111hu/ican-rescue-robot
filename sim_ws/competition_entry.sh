@@ -66,6 +66,52 @@ source "$WS/install/setup.bash"
 echo "[$(date)] 环境已加载"
 
 # ---------------------------------------------------------------------------
+# 1.5 部署识别模型（平台只收 src，节点默认读 ~/.ros/ican_recognize/best.pt）
+# ---------------------------------------------------------------------------
+MODEL_SRC="$WS/src/ican_recognize/models/best.pt"
+MODEL_DST_DIR="$HOME/.ros/ican_recognize"
+MODEL_DST="$MODEL_DST_DIR/best.pt"
+if [ -f "$MODEL_SRC" ]; then
+  mkdir -p "$MODEL_DST_DIR"
+  cp -f "$MODEL_SRC" "$MODEL_DST"
+  export ICAN_YOLO_MODEL="$MODEL_DST"
+  export ICAN_CLS_MODEL="$MODEL_DST"
+  echo "[$(date)] 模型已部署到 $MODEL_DST"
+else
+  echo "❌ 未找到 src 内模型 $MODEL_SRC，识别节点无法加载权重。" >&2
+  echo "   请把训练好的 best.pt 放进 src/ican_recognize/models/ 后再打包上传。" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6 检查并安装识别依赖（ultralytics + torch，平台可能未预装）
+# ---------------------------------------------------------------------------
+if ! python3 -c "import ultralytics" 2>/dev/null; then
+  echo "[$(date)] 未检测到 ultralytics，开始安装识别依赖..."
+  REQ="$WS/src/ican_recognize/requirements.txt"
+  if [ -f "$REQ" ]; then
+    installed=0
+    for attempt in 1 2 3; do
+      echo "  第 $attempt 次尝试 pip install -r $REQ ..."
+      if timeout 300 pip3 install -r "$REQ" 2>&1 | tail -20; then
+        installed=1; break
+      fi
+      sleep 5
+    done
+    if [ "$installed" -ne 1 ] || ! python3 -c "import ultralytics" 2>/dev/null; then
+      echo "❌ 识别依赖安装失败。平台未预装 ultralytics/torch 且网络受限。" >&2
+      echo "   请确认平台环境是否包含这些依赖，或在提交前联系平台支持。" >&2
+      exit 1
+    fi
+    echo "[$(date)] 识别依赖安装完成"
+  else
+    echo "❌ 找不到 $REQ" >&2; exit 1
+  fi
+else
+  echo "[$(date)] 识别依赖已就绪"
+fi
+
+# ---------------------------------------------------------------------------
 # 2. 启动仿真（无头；xvfb 包住以出相机图）
 # ---------------------------------------------------------------------------
 if [ "$USE_XVFB" -eq 1 ]; then
