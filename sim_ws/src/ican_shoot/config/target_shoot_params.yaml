@@ -1,0 +1,50 @@
+# 旋转靶 / 移动靶射击节点参数（D-03 旋转靶 1~5 号、D-04 移动靶 6/7/8 号）
+#
+# 设计依据：靶面的 AR 码只有约 14x14 px、带透视畸变，标准字典解不出，
+# 所以改为读 Gazebo 的靶位姿态 + 几何时序。
+#
+# 旋转靶几何（来自 land_shoot.world，已数值核对）：
+#   5 个叶片等间隔 72°，半径 0.09 m，尺寸 0.01x0.05x0.05
+#   leaf_k 对应靶位 k+1，本地角 phi_k = 90° - 72°*k
+#   叶片世界位置 = 轮心 + R_x(theta)·(0, 0.09cos(phi_k), 0.09sin(phi_k))
+#
+# 关键物理约束：叶片排成圆环、**圆心是空的**，而子弹从 0.26 m 水平射出、
+# 正好穿过轮心 —— 正对轮心射击一发都打不中。必须等叶片转到左右水平位置
+# （垂直偏移 ≈ 0），再让车头偏 ±atan(0.09/距离) ≈ 3.33° 对准它。
+/target_shooter_node:
+  ros__parameters:
+    # ---- 话题/服务 ----
+    gazebo_state_service: /gazebo/get_entity_state
+    cmd_vel_topic: /cmd_vel
+    odom_topic: /odom
+    fire_service: /shooter/shoot
+    shot_topic: /shooter/shot
+    status_topic: /ican_shoot/status
+    wheel_service: /ican_shoot/fire_wheel
+    moving3_service: /ican_shoot/fire_moving_3
+    moving4_service: /ican_shoot/fire_moving_4
+    recognize_target_topic: /ican_recognize/target
+
+    # ---- 靶位编号来源 ----
+    # 识别节点 /ican_recognize/target 会发 rotate_target(1~5) 与 moving_target(6~8)，
+    # 本节点自动采用；识别没给时用下面的兜底值。
+    default_rotate_target: 3
+    default_moving_target: 7
+    # 移动靶板上 3 个码从左到右的顺序。world 文件里只有一张贴图，拿不到编号，
+    # 所以做成参数。若现场确认顺序不同，改这里即可。
+    moving_code_order: "678"
+
+    # ---- 时序与容差 ----
+    poll_hz: 20.0
+    aim_timeout_sec: 20.0          # 叶片 13.8°/s，同一叶片每 13 s 到一次水平位
+    wheel_angle_tol_deg: 6.0
+    settle_sec: 0.15
+    yaw_tol_deg: 0.6
+    max_angular_speed: 0.18
+    yaw_gain: 0.8
+    # 移动靶横向对准容差：码宽约 0.06 m，取 0.012 m 保证打在码中间
+    moving_pos_tol_m: 0.012
+
+    # ---- 射击 ----
+    fire_probe_sec: 2.0            # 实测 /shooter/shoot 响应 5.9~19.9 s 不稳定，只短探测
+    dry_run: true                  # 默认不实弹

@@ -23,6 +23,7 @@ setup(
     entry_points={
         "console_scripts": [
             "ring_shooter_node = ican_shoot.ring_shooter_node:main",
+            "target_shooter_node = ican_shoot.target_shooter_node:main",
         ],
     },
 )
