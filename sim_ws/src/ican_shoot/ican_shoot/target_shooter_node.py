@@ -48,7 +48,7 @@ import rclpy
 from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -199,8 +199,14 @@ class TargetShooterNode(Node):
         # 瞄准线程读到的 model_states / odom 就全是冻结的旧值
         # （实测：20 秒里轮角一直是 94.0°、横向一直是 +35mm，连续不变=389）。
         # 开再多执行器线程也没用 —— 限制来自回调组，不是线程数。
-        # 因此把订阅放进独立的 ReentrantCallbackGroup，让它能和服务回调并发执行。
-        self._io_group = ReentrantCallbackGroup()
+        # 因此把订阅放进独立的 MutuallyExclusiveCallbackGroup，让它能和服务回调并发执行。
+        # 注意：这里必须用 MutuallyExclusiveCallbackGroup，不要用 Reentrant。
+        # 实测 Reentrant 组会让组内的订阅互相饿死：目标节点订阅了 /odom 却
+        # 永远收不到回调，环形靶节点的 det 12 秒不更新（dx 恒为 -46.8px），
+        # 而服务回调（独立组）一切正常。Reentrant 的 can_execute() 恒为 True，
+        # 多线程执行器可能反复挑同一个实体，导致组内其它订阅长期拿不到执行机会。
+        # 用独立的 MutuallyExclusive 组同样能达到「不被服务回调串行化」的目的。
+        self._io_group = MutuallyExclusiveCallbackGroup()
         self._srv_group = MutuallyExclusiveCallbackGroup()
 
         # /odom 用 SensorDataQoS（Gazebo 以 BEST_EFFORT 发布，用 RELIABLE 收不到）

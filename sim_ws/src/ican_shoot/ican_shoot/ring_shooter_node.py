@@ -41,7 +41,7 @@ import time
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped, Twist
 import rclpy
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -138,7 +138,13 @@ class RingShooterNode(Node):
 
         # 回调组：默认组是 MutuallyExclusive，服务回调一阻塞就会把图像回调一起卡住，
         # 瞄准线程只能读到冻结的旧检测结果。把订阅放独立 Reentrant 组即可并发。
-        self._io_group = ReentrantCallbackGroup()
+        # 注意：这里必须用 MutuallyExclusiveCallbackGroup，不要用 Reentrant。
+        # 实测 Reentrant 组会让组内的订阅互相饿死：目标节点订阅了 /odom 却
+        # 永远收不到回调，环形靶节点的 det 12 秒不更新（dx 恒为 -46.8px），
+        # 而服务回调（独立组）一切正常。Reentrant 的 can_execute() 恒为 True，
+        # 多线程执行器可能反复挑同一个实体，导致组内其它订阅长期拿不到执行机会。
+        # 用独立的 MutuallyExclusive 组同样能达到「不被服务回调串行化」的目的。
+        self._io_group = MutuallyExclusiveCallbackGroup()
         self._srv_group = MutuallyExclusiveCallbackGroup()
         self.create_subscription(
             Image, str(self.get_parameter("image_topic").value),
