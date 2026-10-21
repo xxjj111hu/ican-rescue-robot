@@ -119,10 +119,15 @@ class SequentialMissionNode(Node):
         self.declare_parameter("shoot_moving3_service", "/ican_shoot/fire_moving_3")
         self.declare_parameter("shoot_moving4_service", "/ican_shoot/fire_moving_4")
         # 单个点的射击预算：射击节点内部瞄准最长 20 s，再加服务与开火开销
-        self.declare_parameter("shoot_timeout_sec", 30.0)
+        # 环靶瞄准已延长到 20 s，服务预算相应放宽
+        self.declare_parameter("shoot_timeout_sec", 40.0)
         # 进任务点后先用 odom 闭环把车头对准到航点 yaw，再交给射击节点
-        self.declare_parameter("align_yaw_deg", 0.6)
-        self.declare_parameter("align_yaw_timeout_sec", 10.0)
+        # 实测角速度指令只有部分生效（9.4°→1.5° 用了 10 s，约 0.8°/s），
+        # 所以提高增益与限幅、放宽超时、并收紧最终容差。
+        self.declare_parameter("align_yaw_deg", 0.4)
+        self.declare_parameter("align_yaw_timeout_sec", 16.0)
+        self.declare_parameter("align_yaw_gain", 2.5)
+        self.declare_parameter("align_yaw_max_rate", 0.35)
         self.declare_parameter("event_topic", "/mission/event")
         self.declare_parameter("navigate_action", "/navigate_to_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
@@ -157,6 +162,9 @@ class SequentialMissionNode(Node):
             float(self.get_parameter("align_yaw_deg").value))
         self.align_yaw_timeout = float(
             self.get_parameter("align_yaw_timeout_sec").value)
+        self.align_yaw_gain = float(self.get_parameter("align_yaw_gain").value)
+        self.align_yaw_max_rate = float(
+            self.get_parameter("align_yaw_max_rate").value)
         self.result_file = self.get_parameter("result_file").value
 
         # 接口
@@ -753,7 +761,9 @@ class SequentialMissionNode(Node):
             if now - self.align_t0 < self.align_yaw_timeout:
                 tw = Twist()
                 # 角度环用比例控制，限幅 0.25 rad/s（远低于 0.5 m/s 的线速等价量）
-                tw.angular.z = clamp(1.2 * err, -0.25, 0.25)
+                tw.angular.z = clamp(self.align_yaw_gain * err,
+                                     -self.align_yaw_max_rate,
+                                     self.align_yaw_max_rate)
                 self.cmd_pub.publish(tw)
                 return
             self.get_logger().warn(

@@ -32,9 +32,11 @@
     # ---- 闭环瞄准 ----
     tol_px: 8.0                    # ≈1 环
     settle_sec: 0.25               # 连续稳定时长（20 Hz 控制 → 5 帧）
-    aim_gain: 0.0025               # rad/s per px（官方示例值）
+    # 实测联调需更高增益：0.0025 对 14.6px 只产生 0.037 rad/s（2.1°/s），
+    # 12 s 内收敛不到 ±8px。提到 0.004 并延长超时到 20 s。
+    aim_gain: 0.004
     max_angular_speed: 0.30        # 与 Nav2 vx/vy 同量级，避免甩头
-    aim_timeout_sec: 12.0
+    aim_timeout_sec: 20.0
     detect_max_age_sec: 0.6        # 超过这个时间没有新检测就认为丢靶
     detect_wait_sec: 5.0           # 服务被调用时若还没检到靶，先等这么久再判失败
 
