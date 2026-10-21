@@ -41,18 +41,18 @@ def generate_launch_description():
                               description="旋转靶目标编号 1~5（识别节点会覆盖）"),
         DeclareLaunchArgument("moving_target", default_value="7",
                               description="移动靶目标编号 6/7/8（识别节点会覆盖）"),
-        DeclareLaunchArgument("aim_timeout_sec", default_value="20.0",
-                              description="单个靶位最长瞄准时间"),
     ]
 
+    # 注意：aim_timeout_sec 只在 config/target_shoot_params.yaml 里设置。
+    # 这里曾有一个 default="20.0" 的 launch 参数，它会覆盖 yaml，
+    # 导致 yaml 里写的 28.0 从未生效（实测瞄准超时按 20 s 算）——
+    # 同一个参数只能有一个来源，否则改哪份都不确定生效。
     overrides = {
         "dry_run": ParameterValue(LaunchConfiguration("dry_run"), value_type=bool),
         "default_rotate_target": ParameterValue(
             LaunchConfiguration("rotate_target"), value_type=int),
         "default_moving_target": ParameterValue(
             LaunchConfiguration("moving_target"), value_type=int),
-        "aim_timeout_sec": ParameterValue(
-            LaunchConfiguration("aim_timeout_sec"), value_type=float),
     }
 
     node = Node(

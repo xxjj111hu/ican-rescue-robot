@@ -249,7 +249,10 @@ class TargetShooterNode(Node):
             lambda req, resp: self.on_fire_moving(req, resp, "target_moving_4"),
             callback_group=self._srv_group)
 
-        self._lock = threading.Lock()
+        # 必须是 RLock（可重入）：_fire_* 会在锁内调用 _target_for_current_point，
+        # 后者内部也要拿这把锁。用普通 Lock 会二次获取同一把锁而永久死锁
+        # （实测导致所有射击调用返回空消息、每 25 s 超时一次）。
+        self._lock = threading.RLock()
         self.odom = None            # {"x","y","yaw"}
         self.odom_t = 0.0
         self._models = {}           # name -> Pose（来自 /gazebo/model_states）
@@ -558,10 +561,10 @@ class TargetShooterNode(Node):
             self._busy = False
 
     def _fire_wheel(self, response):
-        with self._lock:
-            # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
-            target_id = self._target_for_current_point("rotate") or int(
-                self.get_parameter("default_rotate_target").value)
+        # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
+        # 注意：_target_for_current_point 内部已加锁，这里不要再套一层
+        target_id = self._target_for_current_point("rotate") or int(
+            self.get_parameter("default_rotate_target").value)
         if not (1 <= target_id <= WHEEL_LEAF_COUNT):
             response.success = False
             response.message = f"旋转靶编号非法: {target_id}"
@@ -727,10 +730,10 @@ class TargetShooterNode(Node):
             self._busy = False
 
     def _fire_moving(self, response, name):
-        with self._lock:
-            # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
-            target_id = self._target_for_current_point("moving") or int(
-                self.get_parameter("default_moving_target").value)
+        # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
+        # 注意：_target_for_current_point 内部已加锁，这里不要再套一层
+        target_id = self._target_for_current_point("moving") or int(
+            self.get_parameter("default_moving_target").value)
         if target_id not in self.code_order:
             response.success = False
             response.message = (
