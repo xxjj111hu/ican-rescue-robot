@@ -124,7 +124,10 @@ class SequentialMissionNode(Node):
         # 必须大于射击节点的 aim_timeout(28 s) + 其等待余量(4 s) = 32 s，
         # 否则任务节点会先超时、重试又撞上仍占着互斥服务组的上一次回调，
         # 造成连锁 TIMEOUT（实测 22 s 时点位2/3/4 全部失败）。
-        self.declare_parameter("shoot_timeout_sec", 36.0)
+        # 回到 40 s：这是 4 轮 16/16 验证过的值。
+        # 曾为「同分时用时排名」压到 22 s，结果主指标（成功率）从 4/4 掉到 1/4 ——
+        # 官方的用时排名只在「两支以上队伍同分」时才用，不值得拿成功率去换。
+        self.declare_parameter("shoot_timeout_sec", 40.0)
         # 官方 §1.3(3)：未命中允许多次射击，直至命中一次为止
         # 取 2 次：给一次补救机会，同时把最坏耗时控制在 2x36=72 s
         self.declare_parameter("max_shoot_attempts", 2)
