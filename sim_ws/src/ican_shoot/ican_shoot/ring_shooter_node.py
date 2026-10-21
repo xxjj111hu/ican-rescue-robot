@@ -89,6 +89,8 @@ class RingShooterNode(Node):
         self.declare_parameter("settle_sec", 0.25)
         self.declare_parameter("aim_gain", 0.0025)         # rad/s per px
         self.declare_parameter("max_angular_speed", 0.30)
+        # 最小有效角速度：实测低于约 0.1 rad/s 的指令底盘不会响应
+        self.declare_parameter("min_angular_speed", 0.10)
         self.declare_parameter("aim_timeout_sec", 12.0)
         self.declare_parameter("detect_max_age_sec", 0.6)
         # 服务被调用时若还没检到靶，先等这么久再判失败（联调时任务点刚到位常见）
@@ -112,6 +114,7 @@ class RingShooterNode(Node):
         self.settle_sec = float(self.get_parameter("settle_sec").value)
         self.aim_gain = float(self.get_parameter("aim_gain").value)
         self.max_w = float(self.get_parameter("max_angular_speed").value)
+        self.min_w = float(self.get_parameter("min_angular_speed").value)
         self.aim_timeout = float(self.get_parameter("aim_timeout_sec").value)
         self.detect_max_age = float(self.get_parameter("detect_max_age_sec").value)
         self.detect_wait = float(self.get_parameter("detect_wait_sec").value)
@@ -330,7 +333,11 @@ class RingShooterNode(Node):
             else:
                 stable = 0
                 tw = Twist()
-                tw.angular.z = clamp(-self.aim_gain * dx, -self.max_w, self.max_w)
+                cmd = clamp(-self.aim_gain * dx, -self.max_w, self.max_w)
+                # 低于最小有效量时按符号补足，避免小指令被底盘吞掉而原地等待
+                if abs(cmd) < self.min_w:
+                    cmd = self.min_w if cmd > 0 else -self.min_w
+                tw.angular.z = cmd
                 self.cmd_pub.publish(tw)
             time.sleep(0.05)
 

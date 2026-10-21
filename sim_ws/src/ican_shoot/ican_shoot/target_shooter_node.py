@@ -147,6 +147,8 @@ class TargetShooterNode(Node):
         # 对准叶片/码所需的偏转角容差
         self.declare_parameter("yaw_tol_deg", 0.6)
         self.declare_parameter("max_angular_speed", 0.18)
+        # 最小有效角速度：实测低于约 0.1 rad/s 的指令底盘不会响应
+        self.declare_parameter("min_angular_speed", 0.12)
         self.declare_parameter("yaw_gain", 0.8)
         # 旋转靶水平窗口半角：|r*sin(psi)| <= 叶片半高 0.025 即 arcsin(0.025/0.09)=16.1°，
         # 取 13° 留余量
@@ -172,6 +174,7 @@ class TargetShooterNode(Node):
         self.settle_sec = float(self.get_parameter("settle_sec").value)
         self.yaw_tol = math.radians(float(self.get_parameter("yaw_tol_deg").value))
         self.max_w = float(self.get_parameter("max_angular_speed").value)
+        self.min_w = float(self.get_parameter("min_angular_speed").value)
         self.yaw_gain = float(self.get_parameter("yaw_gain").value)
         self.wheel_window = math.radians(
             float(self.get_parameter("wheel_window_deg").value))
@@ -336,6 +339,13 @@ class TargetShooterNode(Node):
         m = String()
         m.data = json.dumps(payload, ensure_ascii=False)
         self.status_pub.publish(m)
+
+    def _turn_cmd(self, err):
+        """按误差算角速度，并保证不小于最小有效量（否则底盘不响应）。"""
+        cmd = clamp(self.yaw_gain * err, -self.max_w, self.max_w)
+        if abs(cmd) < self.min_w:
+            cmd = self.min_w if err > 0 else -self.min_w
+        return cmd
 
     def _stop(self):
         self.cmd_pub.publish(Twist())
@@ -570,8 +580,7 @@ class TargetShooterNode(Node):
                 # 提前把车头转到位（不因竖直条件不满足就停转 —— 这是上一版的 bug）
                 if not aligned:
                     tw = Twist()
-                    tw.angular.z = clamp(self.yaw_gain * yaw_err,
-                                         -self.max_w, self.max_w)
+                    tw.angular.z = self._turn_cmd(yaw_err)
                     self.cmd_pub.publish(tw)
                 else:
                     self._stop()
@@ -718,7 +727,7 @@ class TargetShooterNode(Node):
             else:
                 settle = 0
                 tw = Twist()
-                tw.angular.z = clamp(self.yaw_gain * yaw_err, -self.max_w, self.max_w)
+                tw.angular.z = self._turn_cmd(yaw_err)
                 self.cmd_pub.publish(tw)
             time.sleep(self.poll_dt)
 

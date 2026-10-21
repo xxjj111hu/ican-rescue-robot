@@ -40,8 +40,12 @@
     wheel_angle_tol_deg: 6.0
     settle_sec: 0.15
     yaw_tol_deg: 0.6
-    max_angular_speed: 0.18
-    yaw_gain: 0.8
+    max_angular_speed: 0.35
+    # 最小有效角速度（低于此值底盘不动）
+    min_angular_speed: 0.12
+    # 实测 0.8 对 2.66 度误差只产生 0.037 rad/s，底盘不响应（窗口内 2 秒横向不变）
+    # 提到 3.0，并配合 min_angular_speed 兜底
+    yaw_gain: 3.0
     # 旋转靶水平窗口半角：叶片竖直偏移 r*sin(psi) <= 半高 0.025
     # 即 arcsin(0.025/0.09) = 16.1°，取 13° 留余量
     wheel_window_deg: 13.0
