@@ -156,6 +156,8 @@ class TargetShooterNode(Node):
         # 服务被调用时若还没收到 /odom，先等这么久再判失败
         # （联调时出现过「本节点没有 /odom」就立刻失败的情况，属瞬时现象）
         self.declare_parameter("odom_wait_sec", 5.0)
+        # 机器人位姿来源：优先 /odom，取不到就用 model_states 里的这个模型
+        self.declare_parameter("robot_model_name", "abot_model")
 
         # 移动靶对准容差（板上的码宽 0.06 m -> 用像素无关的米制容差）
         self.declare_parameter("moving_pos_tol_m", 0.012)
@@ -175,6 +177,7 @@ class TargetShooterNode(Node):
             float(self.get_parameter("wheel_window_deg").value))
         self.wheel_lat_tol = float(self.get_parameter("wheel_lat_tol_m").value)
         self.odom_wait = float(self.get_parameter("odom_wait_sec").value)
+        self.robot_model = str(self.get_parameter("robot_model_name").value)
         self.moving_pos_tol = float(self.get_parameter("moving_pos_tol_m").value)
         self.fire_probe = float(self.get_parameter("fire_probe_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
@@ -282,23 +285,44 @@ class TargetShooterNode(Node):
         with self._lock:
             return (dict(self.odom) if self.odom else None), self.odom_t, self.shot_msgs
 
-    def _wait_odom(self, timeout=None):
-        """等一个新鲜 /odom（年龄 < 1 s），返回 (odom 或 None, 年龄秒)。
+    def _pose_from_model_states(self):
+        """从 /gazebo/model_states 的 abot_model 读机器人位姿（世界系）。"""
+        st = self._get_entity(self.robot_model, timeout=0.2)
+        if st is None:
+            return None
+        q = st.pose.orientation
+        return {
+            "x": float(st.pose.position.x),
+            "y": float(st.pose.position.y),
+            "yaw": yaw_from_quat(q.z, q.w),
+        }
 
-        联调时出现过「本节点没有 /odom」就立刻失败的情况（前两次同样代码却能跑通），
-        说明是瞬时现象。目标节点不该因为一次没收到就放弃整个点的射击。
+    def _robot_pose(self):
+        """返回 (位姿 dict 或 None, 来源字符串)。
+
+        优先 /odom；拿不到（或过期）就用 model_states 里的 abot_model。
+        实测 /odom 在本节点会「订阅成功但回调不执行」，而 model_states 可靠，
+        所以必须有这个兜底，否则旋转靶/移动靶整个功能都会被一个通道拖死。
         """
+        odom, odom_t, _ = self._snapshot()
+        if odom is not None and (time.monotonic() - odom_t) < 1.0:
+            return odom, "odom"
+        p = self._pose_from_model_states()
+        if p is not None:
+            return p, "model_states"
+        return None, "none"
+
+    def _wait_robot_pose(self, timeout=None):
+        """等一个可用的机器人位姿，返回 (位姿 或 None, 来源, 等待秒)。"""
         if timeout is None:
             timeout = self.odom_wait
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
-            odom, odom_t, _ = self._snapshot()
-            if odom is not None and (time.monotonic() - odom_t) < 1.0:
-                return odom, time.monotonic() - odom_t
+            pose, src = self._robot_pose()
+            if pose is not None:
+                return pose, src, time.monotonic() - t0
             time.sleep(0.05)
-        odom, odom_t, _ = self._snapshot()
-        age = (time.monotonic() - odom_t) if odom_t else 9e9
-        return odom, age
+        return None, "none", time.monotonic() - t0
 
     def _publish_status(self, state, **kw):
         payload = {"state": state, "t": round(time.monotonic(), 3)}
@@ -466,17 +490,17 @@ class TargetShooterNode(Node):
             f"准备打旋转靶 {target_id} 号（leaf_{k}，本地角 {math.degrees(phi):.0f}°，"
             f"本地 y={leaf_ly:+.3f} z={leaf_lz:+.3f}）")
 
-        odom, age = self._wait_odom()
-        if odom is None or age >= 1.0:
+        odom, src, waited = self._wait_robot_pose()
+        if odom is None:
             response.success = False
             response.message = (
-                f"本节点没有可用的 /odom（等待 {self.odom_wait:.1f}s，"
-                f"最后年龄 {age:.1f}s）—— 请检查 /odom 是否在发布")
+                f"拿不到机器人位姿（等待 {waited:.1f}s；/odom 与 "
+                f"model_states/{self.robot_model} 都不可用）")
             self.get_logger().warn(response.message)
             return response
         self.get_logger().info(
-            f"/odom 就绪（年龄 {age:.2f}s）位置=("
-            f"{odom['x']:.3f},{odom['y']:.3f}) yaw={math.degrees(odom['yaw']):.1f}deg")
+            f"位姿来源={src} 位置=({odom['x']:.3f},{odom['y']:.3f}) "
+            f"yaw={math.degrees(odom['yaw']):.1f}deg")
 
         t_start = time.monotonic()
         settle = 0
@@ -632,14 +656,15 @@ class TargetShooterNode(Node):
         self.get_logger().info(
             f"准备打 {name} 的 {target_id} 号码（板内 x 偏移 {code_dx:+.3f} m）")
 
-        odom, age = self._wait_odom()
-        if odom is None or age >= 1.0:
+        odom, src, waited = self._wait_robot_pose()
+        if odom is None:
             response.success = False
             response.message = (
-                f"本节点没有可用的 /odom（等待 {self.odom_wait:.1f}s，"
-                f"最后年龄 {age:.1f}s）")
+                f"拿不到机器人位姿（等待 {waited:.1f}s；/odom 与 "
+                f"model_states/{self.robot_model} 都不可用）")
             self.get_logger().warn(response.message)
             return response
+        self.get_logger().info(f"位姿来源={src}")
 
         t_start = time.monotonic()
         settle = 0
