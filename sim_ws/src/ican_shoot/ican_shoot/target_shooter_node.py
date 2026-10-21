@@ -147,6 +147,12 @@ class TargetShooterNode(Node):
         self.declare_parameter("yaw_tol_deg", 0.6)
         self.declare_parameter("max_angular_speed", 0.18)
         self.declare_parameter("yaw_gain", 0.8)
+        # 旋转靶水平窗口半角：|r*sin(psi)| <= 叶片半高 0.025 即 arcsin(0.025/0.09)=16.1°，
+        # 取 13° 留余量
+        self.declare_parameter("wheel_window_deg", 13.0)
+        # 旋转靶横向对准容差（米）
+        self.declare_parameter("wheel_lat_tol_m", 0.012)
+
         # 移动靶对准容差（板上的码宽 0.06 m -> 用像素无关的米制容差）
         self.declare_parameter("moving_pos_tol_m", 0.012)
 
@@ -161,6 +167,9 @@ class TargetShooterNode(Node):
         self.yaw_tol = math.radians(float(self.get_parameter("yaw_tol_deg").value))
         self.max_w = float(self.get_parameter("max_angular_speed").value)
         self.yaw_gain = float(self.get_parameter("yaw_gain").value)
+        self.wheel_window = math.radians(
+            float(self.get_parameter("wheel_window_deg").value))
+        self.wheel_lat_tol = float(self.get_parameter("wheel_lat_tol_m").value)
         self.moving_pos_tol = float(self.get_parameter("moving_pos_tol_m").value)
         self.fire_probe = float(self.get_parameter("fire_probe_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
@@ -434,43 +443,67 @@ class TargetShooterNode(Node):
         prev_theta = None
         log_every = max(1, int(round(0.5 / self.poll_dt)))
         same_count = 0
+        now_side = None          # +1 右(+y)、-1 左(-y)
 
         while time.monotonic() - t_start < self.aim_timeout:
             st = self._get_entity("target_wheel", timeout=1.0)
-            odom, odom_t, _ = self._snapshot()
-            if st is None or odom is None:
+            if st is None:
                 time.sleep(self.poll_dt)
                 continue
             wx = st.pose.position.x
             wy = st.pose.position.y
-            wz = st.pose.position.z
             q = st.pose.orientation
             theta = quat_to_roll_x(q.x, q.y, q.z, q.w)
 
-            # 叶片世界位置 = 轮心 + R_x(theta)·(0, leaf_ly, leaf_lz)
-            ct, stt = math.cos(theta), math.sin(theta)
-            bz_off = leaf_ly * stt + leaf_lz * ct
-            by_off = leaf_ly * ct - leaf_lz * stt
-            bx = wx
-            by = wy + by_off
-            bz = wz + bz_off
-
-            # 条件①：叶片的垂直偏移要落在叶片半高内，水平弹道才擦得到
-            vert_ok = abs(bz_off) <= WHEEL_LEAF_HALF_W
-            # 条件②：车头对准该叶片的水平位置
-            desired_yaw = math.atan2(by - odom["y"], bx - odom["x"])
-            yaw_err = (desired_yaw - odom["yaw"] + math.pi) % (2 * math.pi) - math.pi
-
-            # 车头与叶片的横向偏差（米）
-            dist = math.hypot(bx - odom["x"], by - odom["y"])
-            lateral_err = dist * math.sin(yaw_err)
-            last = (f"轮角={math.degrees(theta) % 360:.0f}° 叶片垂直偏移={bz_off*1000:+.0f}mm "
-                    f"横向偏差={lateral_err*1000:+.0f}mm 朝向误差={math.degrees(yaw_err):+.1f}°")
+            # 叶片的世界角 psi（0 = +y 右侧，pi = -y 左侧）
+            psi = (phi + theta) % (2 * math.pi)
+            # 叶片竖直偏移 = r*sin(psi)；|sin| <= 半高/r 才落在水平窗口内
+            bz_off = WHEEL_LEAF_RADIUS * math.sin(psi)
             if best_err is None or abs(bz_off) < best_err:
                 best_err = abs(bz_off)
 
-            # 过程日志：判断轮子到底转不转。仿真被暂停时 /clock 停走、
-            # model_states 冻结，轮角会一直不变，此时时序瞄准不可能成立。
+            # 选最近的水平窗口中心，并据此确定该转到哪一侧
+            def _near(x, c):
+                return (x - c + math.pi) % (2 * math.pi) - math.pi
+
+            d_r = _near(psi, 0.0)         # 到右侧窗口中心的角度差
+            d_l = _near(psi, math.pi)     # 到左侧窗口中心的角度差
+            if abs(d_r) <= abs(d_l):
+                d_ang, side = d_r, +1
+            else:
+                d_ang, side = d_l, -1
+            in_window = abs(d_ang) <= self.wheel_window
+
+            # 车头目标：直接对准该侧的叶片位置（用 ±r，避免绕圈时来回甩）
+            odom, _, _ = self._snapshot()
+            if odom is not None:
+                by_pred = wy + side * WHEEL_LEAF_RADIUS
+                desired_yaw = math.atan2(by_pred - odom["y"], wx - odom["x"])
+                yaw_err = ((desired_yaw - odom["yaw"] + math.pi)
+                           % (2 * math.pi) - math.pi)
+                dist = math.hypot(wx - odom["x"], by_pred - odom["y"])
+                lateral_err = dist * math.sin(yaw_err)
+                aligned = (abs(lateral_err) <= self.wheel_lat_tol
+                           and abs(yaw_err) <= self.yaw_tol)
+                # 提前把车头转到位（不因竖直条件不满足就停转 —— 这是上一版的 bug）
+                if not aligned:
+                    tw = Twist()
+                    tw.angular.z = clamp(self.yaw_gain * yaw_err,
+                                         -self.max_w, self.max_w)
+                    self.cmd_pub.publish(tw)
+                else:
+                    self._stop()
+                now_side = side
+            else:
+                aligned = False
+                lateral_err = float("nan")
+                yaw_err = float("nan")
+
+            last = (f"轮角={math.degrees(theta) % 360:.0f}° 叶片竖直={bz_off*1000:+.0f}mm "
+                    f"距窗口={math.degrees(d_ang):+.1f}° 侧={'右' if side > 0 else '左'} "
+                    f"横向={lateral_err*1000:+.0f}mm 朝向误差={math.degrees(yaw_err):+.1f}°")
+
+            # 过程日志
             if prev_theta is not None and abs(theta - prev_theta) < 1e-9:
                 same_count += 1
             else:
@@ -480,14 +513,15 @@ class TargetShooterNode(Node):
             if it % log_every == 0:
                 self.get_logger().info(
                     f"[过程] 轮角={math.degrees(theta) % 360:6.1f}° "
-                    f"叶片竖直={bz_off*1000:+5.0f}mm 横向={lateral_err*1000:+5.0f}mm "
-                    f"竖直条件={'OK' if vert_ok else '未满足'} 连续不变={same_count}")
+                    f"竖直={bz_off*1000:+5.0f}mm 距窗口={math.degrees(d_ang):+5.1f}° "
+                    f"窗口={'OK' if in_window else '未到'} "
+                    f"横向={lateral_err*1000:+5.0f}mm 对准={'是' if aligned else '否'} "
+                    f"连续不变={same_count}")
                 if same_count >= int(round(2.0 / self.poll_dt)):
                     self.get_logger().warn(
-                        f"轮角已连续 {same_count} 次不变 —— 仿真很可能被暂停"
-                        f"（Gazebo 里点播放键恢复），或 model_states 未更新")
+                        f"轮角已连续 {same_count} 次不变 —— 仿真很可能被暂停")
 
-            if vert_ok and abs(lateral_err) <= 0.012 and abs(yaw_err) <= self.yaw_tol:
+            if in_window and aligned:
                 settle += 1
                 self._stop()
                 if settle >= need_settle:
@@ -495,27 +529,22 @@ class TargetShooterNode(Node):
                     ok, note = self._fire_and_report()
                     response.success = ok
                     response.message = (
-                        f"旋转靶 {target_id} 号已射击：叶片垂直偏移 {bz_off*1000:+.0f}mm、"
-                        f"横向偏差 {lateral_err*1000:+.0f}mm；{note}")
+                        f"旋转靶 {target_id} 号已射击：叶片竖直偏移 {bz_off*1000:+.0f}mm、"
+                        f"侧别 {'右' if side > 0 else '左'}、横向偏差 "
+                        f"{lateral_err*1000:+.0f}mm；{note}")
                     self._publish_status("done" if ok else "error", detail=response.message)
                     return response
             else:
                 settle = 0
-                if not vert_ok:
-                    # 叶片不在水平位置附近，先别转（转了也没用），等它转过来
-                    self._stop()
-                else:
-                    tw = Twist()
-                    tw.angular.z = clamp(self.yaw_gain * yaw_err, -self.max_w, self.max_w)
-                    self.cmd_pub.publish(tw)
             time.sleep(self.poll_dt)
 
         self._stop()
         response.success = False
         response.message = (
-            f"旋转靶 {target_id} 号：{self.aim_timeout:.0f}s 内未等到条件同时满足 "
+            f"旋转靶 {target_id} 号：{self.aim_timeout:.0f}s 内未等到窗口与对准同时成立 "
             f"（最后：{last if last else '未读到轮子状态'}；"
-            f"最小垂直偏移 {best_err*1000 if best_err else 0:.0f}mm）")
+            f"最小竖直偏移 {best_err*1000 if best_err else 0:.0f}mm、"
+            f"窗口阈值 {math.degrees(self.wheel_window):.0f}°）")
         self._publish_status("timeout", detail=response.message)
         return response
 

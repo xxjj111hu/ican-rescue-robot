@@ -42,6 +42,11 @@
     yaw_tol_deg: 0.6
     max_angular_speed: 0.18
     yaw_gain: 0.8
+    # 旋转靶水平窗口半角：叶片竖直偏移 r*sin(psi) <= 半高 0.025
+    # 即 arcsin(0.025/0.09) = 16.1°，取 13° 留余量
+    wheel_window_deg: 13.0
+    # 旋转靶横向对准容差（米）
+    wheel_lat_tol_m: 0.012
     # 移动靶横向对准容差：码宽约 0.06 m，取 0.012 m 保证打在码中间
     moving_pos_tol_m: 0.012
 
