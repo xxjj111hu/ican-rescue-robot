@@ -120,6 +120,9 @@ class SequentialMissionNode(Node):
         self.declare_parameter("shoot_moving4_service", "/ican_shoot/fire_moving_4")
         # 单个点的射击预算：射击节点内部瞄准最长 20 s，再加服务与开火开销
         self.declare_parameter("shoot_timeout_sec", 30.0)
+        # 进任务点后先用 odom 闭环把车头对准到航点 yaw，再交给射击节点
+        self.declare_parameter("align_yaw_deg", 0.6)
+        self.declare_parameter("align_yaw_timeout_sec", 10.0)
         self.declare_parameter("event_topic", "/mission/event")
         self.declare_parameter("navigate_action", "/navigate_to_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
@@ -150,6 +153,10 @@ class SequentialMissionNode(Node):
         self.nudge_max_sec = float(self.get_parameter("nudge_max_sec").value)
         self.enable_shooting = bool(self.get_parameter("enable_shooting").value)
         self.shoot_timeout = float(self.get_parameter("shoot_timeout_sec").value)
+        self.align_yaw_tol = math.radians(
+            float(self.get_parameter("align_yaw_deg").value))
+        self.align_yaw_timeout = float(
+            self.get_parameter("align_yaw_timeout_sec").value)
         self.result_file = self.get_parameter("result_file").value
 
         # 接口
@@ -227,6 +234,9 @@ class SequentialMissionNode(Node):
         self.shoot_deadline = 0.0
         self.shoot_point = 0
         self.shoot_results = []
+        self.align_t0 = 0.0
+        self.align_target_yaw = 0.0
+        self.align_point = 0
         # 状态机内部计时一律用"单调墙钟"，不用仿真时钟。
         # 原因：use_sim_time=true 时 rclpy 的定时器由 /clock 驱动，一旦节点没收到
         # /clock 或仿真时钟停滞，定时器就永不触发，状态机静默停摆（节点活着但
@@ -577,6 +587,10 @@ class SequentialMissionNode(Node):
                 self.goto_point()
             return
 
+        if self.state == "ALIGN_YAW":
+            self.do_align_yaw(now)
+            return
+
         if self.state == "AIM_SHOOT":
             # 分点狙击：等射击节点的瞄准+开火服务返回。
             # 服务内部最长瞄准 20 s（旋转靶要等叶片转到水平窗口），
@@ -691,8 +705,10 @@ class SequentialMissionNode(Node):
             point = self.wp_index + 1
             self.publish_referee_target(point)
             if self.enable_shooting:
-                # 进入分点狙击状态：调对应靶位的瞄准射击服务（异步，不阻塞 tick）
-                self.start_aim_shoot(point)
+                # 先精确对准车头，再调射击服务。
+                # Nav2 停车的 yaw 偏差可能较大（实测能让 0.27 m 宽的环形靶整块跑出视野），
+                # 而射击节点只负责最后 ±3° 的微调，所以这里先把大头消掉。
+                self.enter_align_yaw(point)
                 return
             self.wp_index += 1
             self.begin_next()
@@ -702,6 +718,51 @@ class SequentialMissionNode(Node):
             self.state = "PARK_NUDGE"
         else:
             self.finish_mission()
+
+    def enter_align_yaw(self, point):
+        """进入 ALIGN_YAW：用 odom 闭环把车头转到当前航点要求的 yaw。"""
+        target_yaw = float(self.current_target[2]) if self.current_target else 0.0
+        odom = self.odom
+        cur = math.degrees(odom["yaw"]) if odom else float("nan")
+        err = float("nan")
+        if odom is not None:
+            err = math.degrees(
+                (target_yaw - odom["yaw"] + math.pi) % (2 * math.pi) - math.pi)
+        self.get_logger().info(
+            f"[对准] 任务点 {point}：目标 yaw={math.degrees(target_yaw):+.1f}° "
+            f"当前={cur:+.1f}° 误差={err:+.1f}°（容差 "
+            f"{math.degrees(self.align_yaw_tol):.1f}°）")
+        self.align_point = point
+        self.align_target_yaw = target_yaw
+        self.align_t0 = time.monotonic()
+        self.state = "ALIGN_YAW"
+
+    def do_align_yaw(self, now):
+        """tick 里的 ALIGN_YAW 处理：转到位或超时就进入射击。"""
+        odom = self.odom
+        if odom is not None:
+            err = (self.align_target_yaw - odom["yaw"] + math.pi) % (
+                2 * math.pi) - math.pi
+            if abs(err) <= self.align_yaw_tol:
+                self.stop_robot()
+                self.get_logger().info(
+                    f"[对准] 任务点 {self.align_point} 车头已到位"
+                    f"（残差 {math.degrees(err):+.2f}°）")
+                self.start_aim_shoot(self.align_point)
+                return
+            if now - self.align_t0 < self.align_yaw_timeout:
+                tw = Twist()
+                # 角度环用比例控制，限幅 0.25 rad/s（远低于 0.5 m/s 的线速等价量）
+                tw.angular.z = clamp(1.2 * err, -0.25, 0.25)
+                self.cmd_pub.publish(tw)
+                return
+            self.get_logger().warn(
+                f"[对准] 任务点 {self.align_point} 对准超时"
+                f"（残差 {math.degrees(err):+.1f}°），仍继续射击")
+        else:
+            self.get_logger().warn("[对准] 没有 odom，跳过对准")
+        self.stop_robot()
+        self.start_aim_shoot(self.align_point)
 
     def start_aim_shoot(self, point):
         """进入分点狙击：调 /ican_shoot/fire_* 服务，异步等结果。
