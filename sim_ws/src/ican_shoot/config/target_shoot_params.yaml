@@ -36,13 +36,16 @@
 
     # ---- 时序与容差 ----
     poll_hz: 20.0
-    aim_timeout_sec: 20.0          # 叶片 13.8°/s，同一叶片每 13 s 到一次水平位
+    # 叶片 13.75 度/秒，同一叶片每 13 s 到一次水平位；32 s 可覆盖 2~3 次窗口
+    aim_timeout_sec: 32.0
     wheel_angle_tol_deg: 6.0
     settle_sec: 0.15
     yaw_tol_deg: 0.6
-    max_angular_speed: 0.35
+    max_angular_speed: 0.45
     # 最小有效角速度（低于此值底盘不动）
-    min_angular_speed: 0.12
+    # 实测 0.12 rad/s(6.9度/秒) 转 6.96 度要 1.5 s，而旋转靶窗口只有 1.9 s，
+    # 常常「窗口来了还在转、转好了窗口已过」。提到 0.25(14.3度/秒)。
+    min_angular_speed: 0.25
     # 实测 0.8 对 2.66 度误差只产生 0.037 rad/s，底盘不响应（窗口内 2 秒横向不变）
     # 提到 3.0，并配合 min_angular_speed 兜底
     yaw_gain: 3.0
@@ -50,7 +53,9 @@
     # 即 arcsin(0.025/0.09) = 16.1°，取 13° 留余量
     wheel_window_deg: 13.0
     # 旋转靶横向对准容差（米）
-    wheel_lat_tol_m: 0.012
+    # 叶片半宽 25 mm，横向容差 20 mm 仍留 20% 余量；
+    # 12 mm 太紧，配合窗口时间压不住
+    wheel_lat_tol_m: 0.020
     # 服务被调用时若还没收到 /odom，先等这么久再判失败
     # （联调时出现过「本节点没有 /odom」立刻失败的情况，属瞬时现象）
     odom_wait_sec: 5.0
