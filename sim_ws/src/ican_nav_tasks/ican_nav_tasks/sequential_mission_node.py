@@ -120,7 +120,11 @@ class SequentialMissionNode(Node):
         self.declare_parameter("shoot_moving4_service", "/ican_shoot/fire_moving_4")
         # 单个点的射击预算：射击节点内部瞄准最长 20 s，再加服务与开火开销
         # 环靶瞄准已延长到 20 s，服务预算相应放宽
-        self.declare_parameter("shoot_timeout_sec", 40.0)
+        # 实测单次瞄准最长 16.9 s，22 s 足够；缩短可减少全程耗时
+        # （官方：同分时按比赛用时排名，用时少者靠前）
+        self.declare_parameter("shoot_timeout_sec", 22.0)
+        # 官方 §1.3(3)：未命中允许多次射击，直至命中一次为止
+        self.declare_parameter("max_shoot_attempts", 3)
         # 进任务点后先用 odom 闭环把车头对准到航点 yaw，再交给射击节点
         # 实测角速度指令只有部分生效（9.4°→1.5° 用了 10 s，约 0.8°/s），
         # 所以提高增益与限幅、放宽超时、并收紧最终容差。
@@ -161,6 +165,8 @@ class SequentialMissionNode(Node):
         self.nudge_max_sec = float(self.get_parameter("nudge_max_sec").value)
         self.enable_shooting = bool(self.get_parameter("enable_shooting").value)
         self.shoot_timeout = float(self.get_parameter("shoot_timeout_sec").value)
+        self.max_shoot_attempts = max(
+            1, int(self.get_parameter("max_shoot_attempts").value))
         self.align_yaw_tol = math.radians(
             float(self.get_parameter("align_yaw_deg").value))
         self.align_yaw_timeout = float(
@@ -248,6 +254,7 @@ class SequentialMissionNode(Node):
         self.shoot_deadline = 0.0
         self.shoot_point = 0
         self.shoot_results = []
+        self.shoot_attempt = 0
         self.align_t0 = 0.0
         self.align_target_yaw = 0.0
         self.align_point = 0
@@ -794,27 +801,30 @@ class SequentialMissionNode(Node):
         self.stop_robot()
         self.start_aim_shoot(self.align_point)
 
-    def start_aim_shoot(self, point):
+    # 可重试的失败类型（官方 §1.3(3)：未命中允许多次射击）
+    RETRYABLE_VERDICTS = ("FAIL", "TIMEOUT", "CALL_ERR")
+
+    def start_aim_shoot(self, point, retry=False):
         """进入分点狙击：调 /ican_shoot/fire_* 服务，异步等结果。
 
-        为什么异步而不同步调：
-        射击节点内部瞄准最长 20 s（旋转靶要等叶片转到水平窗口），阻塞调用会把
-        状态机卡死、也无法在中途响应退出。改成 call_async + tick 里轮询，
-        超时后强制继续 —— 判分要求「全程不中断」优先于「每点都打中」。
+        为什么异步而不同步调：射击节点内部瞄准最长 28 s（旋转靶要等叶片转到
+        水平窗口），阻塞调用会把状态机卡死、也无法中途响应退出。改成
+        call_async + tick 里轮询，超时后按重试策略处理。
+
+        retry=True 表示这是同一任务点的后续尝试：不再重新对准车头
+        （已在点位且已对准），直接再调一次射击服务。
         """
+        if not retry:
+            self.shoot_attempt = 1
         client = self.shoot_clients.get(point)
         if client is None:
-            self.get_logger().warn(f"任务点 {point} 没有对应的射击服务，跳过射击。")
-            self.wp_index += 1
-            self.begin_next()
+            self.shoot_point = point
+            self.finish_aim_shoot("NO_SERVICE", "没有对应的射击服务")
             return
         if not client.service_is_ready() and not client.wait_for_service(timeout_sec=3.0):
-            self.get_logger().error(
-                f"任务点 {point} 的射击服务 {client.srv_name} 不可用，跳过射击"
-                f"（是否忘了启动 ican_shoot？）")
-            self.shoot_results.append((point, "NO_SERVICE"))
-            self.wp_index += 1
-            self.begin_next()
+            self.shoot_point = point
+            self.finish_aim_shoot(
+                "NO_SERVICE", f"{client.srv_name} 不可用（是否忘了启动 ican_shoot？）")
             return
 
         self.stop_robot()
@@ -822,26 +832,39 @@ class SequentialMissionNode(Node):
         self.shoot_deadline = time.monotonic() + self.shoot_timeout
         self.publish_event(f"aiming:point{point}")
         self.get_logger().info(
-            f"[狙击] 任务点 {point}：调用 {client.srv_name}（预算 "
-            f"{self.shoot_timeout:.0f}s）")
+            f"[狙击] 任务点 {point} 第 {self.shoot_attempt}/{self.max_shoot_attempts} 次："
+            f"调用 {client.srv_name}（预算 {self.shoot_timeout:.0f}s）")
         try:
             self.shoot_future = client.call_async(Trigger.Request())
         except Exception as exc:  # noqa: BLE001
-            self.get_logger().error(f"[狙击] 调用失败: {exc}")
-            self.shoot_results.append((point, f"CALL_ERR:{exc}"))
-            self.shoot_future = None
-            self.wp_index += 1
-            self.begin_next()
+            self.finish_aim_shoot("CALL_ERR", str(exc))
             return
         self.state = "AIM_SHOOT"
 
     def finish_aim_shoot(self, verdict, detail=""):
-        """结束本点狙击，进入下一点（无论成败都不中断）。"""
+        """结束本次狙击：可重试的失败就再来一次，否则进入下一点。
+
+        官方 §1.3(3)：每个任务点只认第一次命中，但「若未命中，允许多次射击，
+        直至命中一次为止」。所以瞄准失败（未命中）应当重试，而不是直接放弃 ——
+        原实现失败一次就直接跳到下一点，白丢该点 10 分。
+        """
         point = self.shoot_point
         self.shoot_future = None
-        self.shoot_results.append((point, verdict))
-        self.get_logger().info(f"[狙击] 任务点 {point} 结束：{verdict} {detail}".strip())
+        n = max(1, self.shoot_attempt)
+        self.shoot_results.append((point, verdict if n == 1 else f"{verdict}#{n}"))
+        self.get_logger().info(
+            f"[狙击] 任务点 {point} 第 {n}/{self.max_shoot_attempts} 次结束："
+            f"{verdict} {detail}".strip())
         self.publish_event(f"shot:point{point}:{verdict}")
+
+        if verdict in self.RETRYABLE_VERDICTS and n < self.max_shoot_attempts:
+            self.get_logger().warn(
+                f"[狙击] 任务点 {point} 未成功（{verdict}），按细则「未命中允许多次"
+                f"射击」重试第 {n + 1} 次")
+            self.shoot_attempt = n + 1
+            self.start_aim_shoot(point, retry=True)
+            return
+
         self.wp_index += 1
         self.begin_next()
 
