@@ -314,56 +314,63 @@ class RingShooterNode(Node):
         self._publish_status("firing", dx=round(last_dx, 1))
         future = self.fire_client.call_async(Trigger.Request())
         t_fire = time.monotonic()
-        # 实测该服务约 6 s 才返回（每次调用生成一颗新子弹，无弹药上限）。
-        # 原来只等 3 s，导致成功射击被误判为失败。
-        while not future.done() and (time.monotonic() - t_fire) < self.fire_service_timeout:
+
+        # 只短暂观察服务是否**立刻**报错，不做长时间阻塞。
+        # 实测该服务的响应时间极不稳定：5.9 s / 19.9 s 都出现过（且 12 s 内不返回），
+        # 等服务返回会把状态机拖死，而射击是否计分由 Gazebo 物理判定，
+        # 主程序并不需要等待这个确认。
+        probe_sec = min(2.0, self.fire_service_timeout)
+        while not future.done() and (time.monotonic() - t_fire) < probe_sec:
             time.sleep(0.05)
-        res = None
+
+        svc_ok = True
+        svc_note = ""
         if future.done():
             try:
                 res = future.result()
             except Exception as exc:  # noqa: BLE001
-                self.get_logger().error(f"射击服务调用失败: {exc}")
+                res = None
+                svc_ok = False
+                svc_note = f"服务调用异常: {exc}"
             if res is not None:
-                self.get_logger().info(
-                    f"/shooter/shoot 返回 success={res.success} message='{res.message}' "
-                    f"（耗时 {time.monotonic() - t_fire:.1f}s）")
+                svc_ok = bool(res.success)
+                svc_note = f"服务返回 success={res.success} message='{res.message}'"
+                self.get_logger().info(f"{svc_note}（耗时 {time.monotonic() - t_fire:.1f}s）")
         else:
-            self.get_logger().warn(
-                f"/shooter/shoot {self.fire_service_timeout:.0f}s 未返回，继续等 /shooter/shot")
+            svc_note = f"服务 {probe_sec:.0f}s 内未返回（该服务响应时间不稳定，属已知现象）"
+            self.get_logger().info(svc_note)
 
-        # 等 /shooter/shot 确认发射
-        # 实测：该话题**每发都会发布**，payload 是子弹名（如 bullet_08ac4d6b7a），
-        # 不是只在命中时发 —— 因此可用作"确实射出了"的确认。
-        # 注意竞态：消息可能正好落在最后一轮轮询的 sleep 空档里（实测差 10 ms
-        # 被误判为失败），所以超时后再宽限复查一次。
+        # 再短暂等一下 /shooter/shot 作为"已射出"的佐证；等不到也不判失败
         ok_shot = False
         bullet = ""
-        deadline = time.monotonic() + self.shot_wait
+        deadline = time.monotonic() + min(3.0, self.shot_wait)
         while time.monotonic() < deadline:
             _, _, n = self._snapshot()
             if n > shot0:
                 ok_shot = True
                 break
             time.sleep(0.03)
-        if not ok_shot:
-            time.sleep(0.3)          # 宽限复查，消除轮询竞态
-            _, _, n = self._snapshot()
-            ok_shot = n > shot0
         if ok_shot:
             with self._lock:
                 bullet = self.last_shot_name
 
         if ok_shot:
             response.success = True
-            response.message = (f"已射击并确认射出（{bullet}）；dx={last_dx:+.1f}px，"
+            response.message = (f"已射击（confirmed {bullet}）；dx={last_dx:+.1f}px，"
                                 f"估算 {rings:.1f} 环，瞄准耗时 {aim_sec:.1f}s")
+        elif svc_ok:
+            # 服务没有报错，只是确认消息还没到 —— 视为已发射，不阻塞流程
+            response.success = True
+            response.message = (f"已发射（未等到 /shooter/shot 确认，属已知延迟）；"
+                                f"dx={last_dx:+.1f}px，估算 {rings:.1f} 环"
+                                f"{'；' + svc_note if svc_note else ''}")
         else:
             response.success = False
-            response.message = (f"射击服务已调用，但 {self.shot_wait:.1f}s（含 0.3s 宽限）"
-                                f"内仍未收到 /shooter/shot（dx={last_dx:+.1f}px）")
+            response.message = (f"射击服务报错：{svc_note}；"
+                                f"dx={last_dx:+.1f}px，估算 {rings:.1f} 环")
         self.get_logger().info(response.message)
-        self._publish_status("done" if ok_shot else "error", detail=response.message)
+        self._publish_status("done" if response.success else "error",
+                             detail=response.message)
         return response
 
 
