@@ -37,5 +37,8 @@
 
     # ---- 射击 ----
     dry_run: true                  # 默认真不实弹！先验证瞄准再改成 false
-    shot_wait_sec: 2.5
+    # 实测：/shooter/shoot 调用后约 6 s 才返回并发布 /shooter/shot（每次生成新子弹，无弹药上限）
+    # 所以这两个等待必须留足，否则会把成功射击误判成失败
+    shot_wait_sec: 8.0
+    fire_service_timeout_sec: 12.0
     holster_settle_sec: 0.4        # 开火前停稳的时长

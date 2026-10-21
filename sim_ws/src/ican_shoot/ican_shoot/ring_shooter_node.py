@@ -93,7 +93,10 @@ class RingShooterNode(Node):
 
         # ---- 射击 ----
         self.declare_parameter("dry_run", False)
-        self.declare_parameter("shot_wait_sec", 2.5)
+        self.declare_parameter("shot_wait_sec", 8.0)
+        # 实测：/shooter/shoot 调用后约 6 秒才返回并发布 /shooter/shot，
+        # 所以服务等待必须 >= 10 s，否则会把成功射击误判成失败。
+        self.declare_parameter("fire_service_timeout_sec", 12.0)
         self.declare_parameter("holster_settle_sec", 0.4)
 
         self.bridge = CvBridge()
@@ -110,6 +113,8 @@ class RingShooterNode(Node):
         self.detect_max_age = float(self.get_parameter("detect_max_age_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
         self.shot_wait = float(self.get_parameter("shot_wait_sec").value)
+        self.fire_service_timeout = float(
+            self.get_parameter("fire_service_timeout_sec").value)
         self.holster_settle = float(self.get_parameter("holster_settle_sec").value)
 
         # ---- 发布/订阅 ----
@@ -309,16 +314,23 @@ class RingShooterNode(Node):
         self._publish_status("firing", dx=round(last_dx, 1))
         future = self.fire_client.call_async(Trigger.Request())
         t_fire = time.monotonic()
-        while not future.done() and (time.monotonic() - t_fire) < 3.0:
-            time.sleep(0.02)
-        try:
-            res = future.result() if future.done() else None
-        except Exception as exc:  # noqa: BLE001
-            res = None
-            self.get_logger().error(f"射击服务调用失败: {exc}")
-        if res is not None:
-            self.get_logger().info(
-                f"/shooter/shoot 返回 success={res.success} message='{res.message}'")
+        # 实测该服务约 6 s 才返回（每次调用生成一颗新子弹，无弹药上限）。
+        # 原来只等 3 s，导致成功射击被误判为失败。
+        while not future.done() and (time.monotonic() - t_fire) < self.fire_service_timeout:
+            time.sleep(0.05)
+        res = None
+        if future.done():
+            try:
+                res = future.result()
+            except Exception as exc:  # noqa: BLE001
+                self.get_logger().error(f"射击服务调用失败: {exc}")
+            if res is not None:
+                self.get_logger().info(
+                    f"/shooter/shoot 返回 success={res.success} message='{res.message}' "
+                    f"（耗时 {time.monotonic() - t_fire:.1f}s）")
+        else:
+            self.get_logger().warn(
+                f"/shooter/shoot {self.fire_service_timeout:.0f}s 未返回，继续等 /shooter/shot")
 
         # 等 /shooter/shot 确认发射
         # 实测：该话题**每发都会发布**，payload 是子弹名（如 bullet_08ac4d6b7a），
