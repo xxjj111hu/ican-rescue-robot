@@ -113,6 +113,13 @@ class SequentialMissionNode(Node):
         self.declare_parameter("nudge_max_sec", 12.0)
         self.declare_parameter("enable_shooting", False)
         self.declare_parameter("fire_service", "/shooter/shoot")
+        # 分点狙击服务（D-05）：按任务点顺序调用对应的瞄准射击服务
+        self.declare_parameter("shoot_ring_service", "/ican_shoot/fire_ring")
+        self.declare_parameter("shoot_wheel_service", "/ican_shoot/fire_wheel")
+        self.declare_parameter("shoot_moving3_service", "/ican_shoot/fire_moving_3")
+        self.declare_parameter("shoot_moving4_service", "/ican_shoot/fire_moving_4")
+        # 单个点的射击预算：射击节点内部瞄准最长 20 s，再加服务与开火开销
+        self.declare_parameter("shoot_timeout_sec", 30.0)
         self.declare_parameter("event_topic", "/mission/event")
         self.declare_parameter("navigate_action", "/navigate_to_pose")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
@@ -142,6 +149,7 @@ class SequentialMissionNode(Node):
         self.nudge_speed = float(self.get_parameter("nudge_speed").value)
         self.nudge_max_sec = float(self.get_parameter("nudge_max_sec").value)
         self.enable_shooting = bool(self.get_parameter("enable_shooting").value)
+        self.shoot_timeout = float(self.get_parameter("shoot_timeout_sec").value)
         self.result_file = self.get_parameter("result_file").value
 
         # 接口
@@ -151,6 +159,17 @@ class SequentialMissionNode(Node):
         self.fire_client = self.create_client(
             Trigger, str(self.get_parameter("fire_service").value)
         )
+        # 分点狙击客户端：①环形靶 ②旋转靶 ③移动靶3 ④移动靶4
+        self.shoot_clients = {
+            1: self.create_client(
+                Trigger, str(self.get_parameter("shoot_ring_service").value)),
+            2: self.create_client(
+                Trigger, str(self.get_parameter("shoot_wheel_service").value)),
+            3: self.create_client(
+                Trigger, str(self.get_parameter("shoot_moving3_service").value)),
+            4: self.create_client(
+                Trigger, str(self.get_parameter("shoot_moving4_service").value)),
+        }
         self.cmd_pub = self.create_publisher(
             Twist, str(self.get_parameter("cmd_vel_topic").value), 10
         )
@@ -203,6 +222,11 @@ class SequentialMissionNode(Node):
 
         # 状态
         self.state = "WAITING"
+        # 分点狙击（D-05）运行时状态
+        self.shoot_future = None
+        self.shoot_deadline = 0.0
+        self.shoot_point = 0
+        self.shoot_results = []
         # 状态机内部计时一律用"单调墙钟"，不用仿真时钟。
         # 原因：use_sim_time=true 时 rclpy 的定时器由 /clock 驱动，一旦节点没收到
         # /clock 或仿真时钟停滞，定时器就永不触发，状态机静默停摆（节点活着但
@@ -553,6 +577,31 @@ class SequentialMissionNode(Node):
                 self.goto_point()
             return
 
+        if self.state == "AIM_SHOOT":
+            # 分点狙击：等射击节点的瞄准+开火服务返回。
+            # 服务内部最长瞄准 20 s（旋转靶要等叶片转到水平窗口），
+            # 所以这里只轮询、不阻塞，超时后强制继续（不中断优先）。
+            #
+            # ⚠️ 这里**绝对不能**发布 /cmd_vel：射击节点此刻正在发 /cmd_vel
+            # 微转车头对准靶位，本节点再发零速会与之打架，车会抖动、永远对不准。
+            # 本节点只在进入狙击前调用一次 stop_robot() 把车停稳。
+            fut = self.shoot_future
+            if fut is not None and fut.done():
+                try:
+                    res = fut.result()
+                    ok = bool(getattr(res, "success", False))
+                    msg = str(getattr(res, "message", ""))
+                except Exception as exc:  # noqa: BLE001
+                    self.finish_aim_shoot("CALL_ERR", str(exc))
+                    return
+                self.finish_aim_shoot("OK" if ok else "FAIL", msg)
+                return
+            if now >= self.shoot_deadline:
+                self.safe_cancel_future(fut)
+                self.finish_aim_shoot(
+                    "TIMEOUT", f"超过 {self.shoot_timeout:.0f}s 未返回")
+            return
+
     def begin_next(self):
         # 换点：重置脱困计数，避免上一个点的自救次数拖累后续点位
         self._recover_count = 0
@@ -637,11 +686,14 @@ class SequentialMissionNode(Node):
             self.state = "WAIT_RECOGNITION"
             return
 
-        # ---- 第二段：进入任务点 → 声明射击点 → 射击 → 下一点 ----
+        # ---- 第二段：进入任务点 → 声明射击点 → 瞄准射击 → 下一点 ----
         if label.startswith("task_"):
-            self.publish_referee_target(self.wp_index + 1)
+            point = self.wp_index + 1
+            self.publish_referee_target(point)
             if self.enable_shooting:
-                self.fire()
+                # 进入分点狙击状态：调对应靶位的瞄准射击服务（异步，不阻塞 tick）
+                self.start_aim_shoot(point)
+                return
             self.wp_index += 1
             self.begin_next()
         elif label.startswith("base"):
@@ -650,6 +702,67 @@ class SequentialMissionNode(Node):
             self.state = "PARK_NUDGE"
         else:
             self.finish_mission()
+
+    def start_aim_shoot(self, point):
+        """进入分点狙击：调 /ican_shoot/fire_* 服务，异步等结果。
+
+        为什么异步而不同步调：
+        射击节点内部瞄准最长 20 s（旋转靶要等叶片转到水平窗口），阻塞调用会把
+        状态机卡死、也无法在中途响应退出。改成 call_async + tick 里轮询，
+        超时后强制继续 —— 判分要求「全程不中断」优先于「每点都打中」。
+        """
+        client = self.shoot_clients.get(point)
+        if client is None:
+            self.get_logger().warn(f"任务点 {point} 没有对应的射击服务，跳过射击。")
+            self.wp_index += 1
+            self.begin_next()
+            return
+        if not client.service_is_ready() and not client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().error(
+                f"任务点 {point} 的射击服务 {client.srv_name} 不可用，跳过射击"
+                f"（是否忘了启动 ican_shoot？）")
+            self.shoot_results.append((point, "NO_SERVICE"))
+            self.wp_index += 1
+            self.begin_next()
+            return
+
+        self.stop_robot()
+        self.shoot_point = point
+        self.shoot_deadline = time.monotonic() + self.shoot_timeout
+        self.publish_event(f"aiming:point{point}")
+        self.get_logger().info(
+            f"[狙击] 任务点 {point}：调用 {client.srv_name}（预算 "
+            f"{self.shoot_timeout:.0f}s）")
+        try:
+            self.shoot_future = client.call_async(Trigger.Request())
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().error(f"[狙击] 调用失败: {exc}")
+            self.shoot_results.append((point, f"CALL_ERR:{exc}"))
+            self.shoot_future = None
+            self.wp_index += 1
+            self.begin_next()
+            return
+        self.state = "AIM_SHOOT"
+
+    def finish_aim_shoot(self, verdict, detail=""):
+        """结束本点狙击，进入下一点（无论成败都不中断）。"""
+        point = self.shoot_point
+        self.shoot_future = None
+        self.shoot_results.append((point, verdict))
+        self.get_logger().info(f"[狙击] 任务点 {point} 结束：{verdict} {detail}".strip())
+        self.publish_event(f"shot:point{point}:{verdict}")
+        self.wp_index += 1
+        self.begin_next()
+
+    def safe_cancel_future(self, fut):
+        """尽力取消一个未完成的 future（rclpy 不支持真正取消，仅做清理与记录）。"""
+        if fut is None:
+            return
+        try:
+            if not fut.done():
+                fut.cancel()
+        except Exception:  # noqa: BLE001
+            pass
 
     def cancel_nav_goal(self):
         """异步取消当前导航目标（取消失败不影响后续流程）。"""
@@ -802,6 +915,14 @@ class SequentialMissionNode(Node):
                 self.amcl["x"] - self.base[0], self.amcl["y"] - self.base[1]
             )
             lines.append(f"停车误差(AMCL vs 指挥中心): {park_err:.3f} m")
+        # 分点狙击结果（D-05）：OK=服务返回 success、FAIL=瞄准未成功、
+        # TIMEOUT=超预算、NO_SERVICE=射击节点没起
+        if self.shoot_results:
+            lines.append("分点狙击结果(①环形靶 ②旋转靶 ③移动靶3 ④移动靶4):")
+            for p, v in self.shoot_results:
+                lines.append(f"  任务点{p}: {v}")
+        else:
+            lines.append("分点狙击结果: 未启用（enable_shooting=false）")
         text = "\n".join(lines)
         self.get_logger().info(text)
         if self.result_file:
