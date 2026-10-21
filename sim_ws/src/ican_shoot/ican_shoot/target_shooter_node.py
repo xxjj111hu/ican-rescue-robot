@@ -153,6 +153,9 @@ class TargetShooterNode(Node):
         self.declare_parameter("wheel_window_deg", 13.0)
         # 旋转靶横向对准容差（米）
         self.declare_parameter("wheel_lat_tol_m", 0.012)
+        # 服务被调用时若还没收到 /odom，先等这么久再判失败
+        # （联调时出现过「本节点没有 /odom」就立刻失败的情况，属瞬时现象）
+        self.declare_parameter("odom_wait_sec", 5.0)
 
         # 移动靶对准容差（板上的码宽 0.06 m -> 用像素无关的米制容差）
         self.declare_parameter("moving_pos_tol_m", 0.012)
@@ -171,6 +174,7 @@ class TargetShooterNode(Node):
         self.wheel_window = math.radians(
             float(self.get_parameter("wheel_window_deg").value))
         self.wheel_lat_tol = float(self.get_parameter("wheel_lat_tol_m").value)
+        self.odom_wait = float(self.get_parameter("odom_wait_sec").value)
         self.moving_pos_tol = float(self.get_parameter("moving_pos_tol_m").value)
         self.fire_probe = float(self.get_parameter("fire_probe_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
@@ -277,6 +281,24 @@ class TargetShooterNode(Node):
     def _snapshot(self):
         with self._lock:
             return (dict(self.odom) if self.odom else None), self.odom_t, self.shot_msgs
+
+    def _wait_odom(self, timeout=None):
+        """等一个新鲜 /odom（年龄 < 1 s），返回 (odom 或 None, 年龄秒)。
+
+        联调时出现过「本节点没有 /odom」就立刻失败的情况（前两次同样代码却能跑通），
+        说明是瞬时现象。目标节点不该因为一次没收到就放弃整个点的射击。
+        """
+        if timeout is None:
+            timeout = self.odom_wait
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            odom, odom_t, _ = self._snapshot()
+            if odom is not None and (time.monotonic() - odom_t) < 1.0:
+                return odom, time.monotonic() - odom_t
+            time.sleep(0.05)
+        odom, odom_t, _ = self._snapshot()
+        age = (time.monotonic() - odom_t) if odom_t else 9e9
+        return odom, age
 
     def _publish_status(self, state, **kw):
         payload = {"state": state, "t": round(time.monotonic(), 3)}
@@ -444,11 +466,17 @@ class TargetShooterNode(Node):
             f"准备打旋转靶 {target_id} 号（leaf_{k}，本地角 {math.degrees(phi):.0f}°，"
             f"本地 y={leaf_ly:+.3f} z={leaf_lz:+.3f}）")
 
-        odom, _, _ = self._snapshot()
-        if odom is None:
+        odom, age = self._wait_odom()
+        if odom is None or age >= 1.0:
             response.success = False
-            response.message = "本节点没有 /odom（无法做车头闭环）"
+            response.message = (
+                f"本节点没有可用的 /odom（等待 {self.odom_wait:.1f}s，"
+                f"最后年龄 {age:.1f}s）—— 请检查 /odom 是否在发布")
+            self.get_logger().warn(response.message)
             return response
+        self.get_logger().info(
+            f"/odom 就绪（年龄 {age:.2f}s）位置=("
+            f"{odom['x']:.3f},{odom['y']:.3f}) yaw={math.degrees(odom['yaw']):.1f}deg")
 
         t_start = time.monotonic()
         settle = 0
@@ -604,10 +632,13 @@ class TargetShooterNode(Node):
         self.get_logger().info(
             f"准备打 {name} 的 {target_id} 号码（板内 x 偏移 {code_dx:+.3f} m）")
 
-        odom, _, _ = self._snapshot()
-        if odom is None:
+        odom, age = self._wait_odom()
+        if odom is None or age >= 1.0:
             response.success = False
-            response.message = "本节点没有 /odom"
+            response.message = (
+                f"本节点没有可用的 /odom（等待 {self.odom_wait:.1f}s，"
+                f"最后年龄 {age:.1f}s）")
+            self.get_logger().warn(response.message)
             return response
 
         t_start = time.monotonic()
