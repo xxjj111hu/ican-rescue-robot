@@ -48,6 +48,7 @@ import rclpy
 from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -185,31 +186,46 @@ class TargetShooterNode(Node):
         self.status_pub = self.create_publisher(
             String, str(self.get_parameter("status_topic").value), status_qos)
 
+        # ---- 回调组：这是本节点最关键的一处设计 ----
+        # ROS 2 节点默认的回调组是 MutuallyExclusiveCallbackGroup：同一组的回调严格串行。
+        # 于是「服务回调阻塞等结果」会把同一节点里所有订阅回调一起卡住，
+        # 瞄准线程读到的 model_states / odom 就全是冻结的旧值
+        # （实测：20 秒里轮角一直是 94.0°、横向一直是 +35mm，连续不变=389）。
+        # 开再多执行器线程也没用 —— 限制来自回调组，不是线程数。
+        # 因此把订阅放进独立的 ReentrantCallbackGroup，让它能和服务回调并发执行。
+        self._io_group = ReentrantCallbackGroup()
+        self._srv_group = MutuallyExclusiveCallbackGroup()
+
         # /odom 用 SensorDataQoS（Gazebo 以 BEST_EFFORT 发布，用 RELIABLE 收不到）
         self.create_subscription(
             Odometry, str(self.get_parameter("odom_topic").value),
-            self.on_odom, qos_profile_sensor_data)
+            self.on_odom, qos_profile_sensor_data, callback_group=self._io_group)
         # 靶位姿态：订阅 model_states（比 get_entity_state 服务可靠，见 on_model_states 注释）
         self.create_subscription(
             ModelStates, str(self.get_parameter("model_states_topic").value),
-            self.on_model_states, 10)
+            self.on_model_states, qos_profile_sensor_data, callback_group=self._io_group)
         self.create_subscription(
-            String, str(self.get_parameter("shot_topic").value), self.on_shot, 10)
+            String, str(self.get_parameter("shot_topic").value), self.on_shot, 10,
+            callback_group=self._io_group)
         self.create_subscription(
             String, str(self.get_parameter("recognize_target_topic").value),
-            self.on_recog_target, 10)
+            self.on_recog_target, 10, callback_group=self._io_group)
 
         self.fire_client = self.create_client(
-            Trigger, str(self.get_parameter("fire_service").value))
+            Trigger, str(self.get_parameter("fire_service").value),
+            callback_group=self._io_group)
 
         self.create_service(
-            Trigger, str(self.get_parameter("wheel_service").value), self.on_fire_wheel)
+            Trigger, str(self.get_parameter("wheel_service").value), self.on_fire_wheel,
+            callback_group=self._srv_group)
         self.create_service(
             Trigger, str(self.get_parameter("moving3_service").value),
-            lambda req, resp: self.on_fire_moving(req, resp, "target_moving_3"))
+            lambda req, resp: self.on_fire_moving(req, resp, "target_moving_3"),
+            callback_group=self._srv_group)
         self.create_service(
             Trigger, str(self.get_parameter("moving4_service").value),
-            lambda req, resp: self.on_fire_moving(req, resp, "target_moving_4"))
+            lambda req, resp: self.on_fire_moving(req, resp, "target_moving_4"),
+            callback_group=self._srv_group)
 
         self._lock = threading.Lock()
         self.odom = None            # {"x","y","yaw"}
@@ -650,7 +666,7 @@ class TargetShooterNode(Node):
 def main():
     rclpy.init()
     node = TargetShooterNode()
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = MultiThreadedExecutor(num_threads=6)
     executor.add_node(node)
     try:
         executor.spin()

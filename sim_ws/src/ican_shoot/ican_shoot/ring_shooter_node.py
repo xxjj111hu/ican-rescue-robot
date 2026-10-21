@@ -41,6 +41,7 @@ import time
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped, Twist
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -132,16 +133,23 @@ class RingShooterNode(Node):
             self.debug_pub = self.create_publisher(
                 Image, str(self.get_parameter("debug_topic").value), 10)
 
+        # 回调组：默认组是 MutuallyExclusive，服务回调一阻塞就会把图像回调一起卡住，
+        # 瞄准线程只能读到冻结的旧检测结果。把订阅放独立 Reentrant 组即可并发。
+        self._io_group = ReentrantCallbackGroup()
+        self._srv_group = MutuallyExclusiveCallbackGroup()
         self.create_subscription(
             Image, str(self.get_parameter("image_topic").value),
-            self.on_image, qos_profile_sensor_data)
+            self.on_image, qos_profile_sensor_data, callback_group=self._io_group)
         self.create_subscription(
-            String, str(self.get_parameter("shot_topic").value), self.on_shot, 10)
+            String, str(self.get_parameter("shot_topic").value), self.on_shot, 10,
+            callback_group=self._io_group)
 
         self.fire_client = self.create_client(
-            Trigger, str(self.get_parameter("fire_service").value))
+            Trigger, str(self.get_parameter("fire_service").value),
+            callback_group=self._io_group)
         self.create_service(
-            Trigger, str(self.get_parameter("service_name").value), self.on_fire_ring)
+            Trigger, str(self.get_parameter("service_name").value), self.on_fire_ring,
+            callback_group=self._srv_group)
 
         # ---- 共享状态（服务线程读，图像线程写）----
         self.det = None
@@ -378,7 +386,7 @@ def main():
     rclpy.init()
     node = RingShooterNode()
     # 服务线程阻塞时，图像回调需在另一线程继续跑 -> 多线程执行器
-    executor = MultiThreadedExecutor(num_threads=3)
+    executor = MultiThreadedExecutor(num_threads=6)
     executor.add_node(node)
     try:
         executor.spin()
