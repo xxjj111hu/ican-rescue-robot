@@ -100,14 +100,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. 识别依赖：缺啥装啥（torch 可能已预装），多镜像多轮，装不上才降级
-#    [20261022] 第二轮平台实测 57 分：pip 240s 没装完 ultralytics → 识别节点崩
-#    → 3 枪全打兜底编号（日志两块移动靶命中同一 region=7 铁证）。
-#    本段改为：分别探测 torch / ultralytics，只装缺的；阿里云镜像优先；
-#    首轮 420s + 二轮 240s；最后一搏 --no-deps（torch 在时足够启动）。
+# 3. 识别依赖：缺啥装啥，但 pip 总预算必须 ≤ 360s
+#    [20261022] 第三轮实测 TIMEOUT 教训：多镜像 420s×2+120s×2 最多 1080s，
+#    超过平台 901s 强杀线 → 任务节点根本没起来 → 0 分。
+#    平台网络装不动完整 ultralytics（上轮 240s 失败），重试无意义：
+#    只试阿里云单镜像，先 --no-deps（小包快速活）再完整一次，到 360s 止。
 # ---------------------------------------------------------------------------
 DEPS_OK=0
-PIP_MIRRORS="https://mirrors.aliyun.com/pypi/simple https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple"
 
 HAVE_TORCH=0; HAVE_ULTRA=0
 python3 -c "import torch" 2>/dev/null && HAVE_TORCH=1
@@ -116,25 +116,19 @@ if [ "$HAVE_ULTRA" -eq 1 ]; then
   DEPS_OK=1
   say "recognition deps preinstalled (torch=$HAVE_TORCH)"
 else
-  say "ultralytics missing (torch=$HAVE_TORCH), bounded pip attempts..."
-  # 尝试 1：完整安装（420s）——torch 已在时这里只需几秒
-  for mirror in $PIP_MIRRORS; do
-    [ "$DEPS_OK" -eq 1 ] && break
-    say "pip attempt via $mirror (420s)..."
-    if timeout 420 pip3 install --index-url "$mirror" \
-         "numpy<2" ultralytics > "$LOG/pip1.log" 2>&1; then
+  say "ultralytics missing (torch=$HAVE_TORCH), bounded pip (total<=360s)..."
+  # 尝试 1：--no-deps 只装 ultralytics 本体（几 MB，120s）——torch 已在时即可用
+  if timeout 120 pip3 install --no-deps --index-url "$PIP_MIRROR" \
+       ultralytics > "$LOG/pip1.log" 2>&1; then
+    python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1
+  fi
+  # 尝试 2：完整安装（240s，单镜像）——torch 不在或尝试1后仍缺依赖时
+  if [ "$DEPS_OK" -eq 0 ]; then
+    say "pip full attempt (240s)..."
+    if timeout 240 pip3 install --index-url "$PIP_MIRROR" \
+         "numpy<2" ultralytics > "$LOG/pip2.log" 2>&1; then
       python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1
     fi
-  done
-  # 尝试 2：--no-deps 只装 ultralytics 本体（几 MB），依赖缺了运行时再兜
-  if [ "$DEPS_OK" -eq 0 ]; then
-    for mirror in $PIP_MIRRORS; do
-      say "pip --no-deps attempt via $mirror (120s)..."
-      if timeout 120 pip3 install --no-deps --index-url "$mirror" \
-           ultralytics >> "$LOG/pip2.log" 2>&1; then
-        python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1 && break
-      fi
-    done
   fi
   pip3 uninstall -y setuptools >/dev/null 2>&1 || true
 fi
@@ -221,9 +215,10 @@ fi
 say "all nodes up, watching until mission ends..."
 
 # ---------------------------------------------------------------------------
-# 9. 挂住直到任务进程结束（最长再守 8 分钟，防无限占用）
+# 9. 挂住直到任务进程结束——但全局死线 860s（平台 901s 强杀，留余量）
 # ---------------------------------------------------------------------------
-deadline=$(( $(date +%s) + 480 ))
+say "elapsed so far: $(( $(date +%s) - T0 ))s"
+deadline=$(( T0 + 860 ))
 while kill -0 "$MISSION_PID" 2>/dev/null && [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 10
 done
