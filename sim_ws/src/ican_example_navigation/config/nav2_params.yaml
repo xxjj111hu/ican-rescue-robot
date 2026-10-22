@@ -146,7 +146,9 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       # [Task13/14] relax to match mission acceptance (node xy_tol=0.15). AMCL has ~0.1m
       # steady bias near points, so a 0.03 checker never succeeds and each leg burns the 120s timeout.
-      xy_goal_tolerance: 0.15
+      # [20261022 platform run] overlap was 70~88% at shoot time; tighten 0.15->0.10 to park
+      # closer to the task point (position score = overlap), still > AMCL bias so it converges.
+      xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 0.20
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
