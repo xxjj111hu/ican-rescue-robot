@@ -73,7 +73,9 @@ source "$WS/install/setup.bash"
 say "env ready"
 
 # ---------------------------------------------------------------------------
-# 2. 部署识别模型（不因缺模型而中止全流程）
+# 2. 部署识别模型与模板（不因缺模型而中止全流程）
+#    [20261022] 新增 templates/：官方贴图源文件，template 模式（纯 OpenCV）
+#    兜底识别用——torch/ultralytics 装不上时识别链路也能活。
 # ---------------------------------------------------------------------------
 MODEL_SRC="$WS/src/ican_recognize/models/best.pt"
 MODEL_DST_DIR="$HOME/.ros/ican_recognize"
@@ -87,19 +89,52 @@ if [ -f "$MODEL_SRC" ]; then
 else
   say "warn: model missing, recognition will degrade"
 fi
+TPL_SRC="$WS/src/ican_recognize/templates"
+TPL_DST="$MODEL_DST_DIR/templates"
+if [ -d "$TPL_SRC" ]; then
+  mkdir -p "$TPL_DST"
+  cp -f "$TPL_SRC"/* "$TPL_DST"/ 2>/dev/null
+  say "templates deployed ($(ls "$TPL_DST" | wc -l) files)"
+else
+  say "warn: templates missing"
+fi
 
 # ---------------------------------------------------------------------------
-# 3. 识别依赖：限时单次尝试（240s），装不上就降级（不装识别只跑导航+任务）
+# 3. 识别依赖：缺啥装啥（torch 可能已预装），多镜像多轮，装不上才降级
+#    [20261022] 第二轮平台实测 57 分：pip 240s 没装完 ultralytics → 识别节点崩
+#    → 3 枪全打兜底编号（裁判日志两块移动靶命中同一 region=7 铁证）。
+#    本段改为：分别探测 torch / ultralytics，只装缺的；阿里云镜像优先；
+#    首轮 420s + 二轮 240s；最后一搏 --no-deps（torch 在时足够启动）。
 # ---------------------------------------------------------------------------
 DEPS_OK=0
-if python3 -c "import ultralytics" 2>/dev/null; then
+PIP_MIRRORS="https://mirrors.aliyun.com/pypi/simple https://pypi.tuna.tsinghua.edu.cn/simple"
+
+HAVE_TORCH=0; HAVE_ULTRA=0
+python3 -c "import torch" 2>/dev/null && HAVE_TORCH=1
+python3 -c "import ultralytics" 2>/dev/null && HAVE_ULTRA=1
+if [ "$HAVE_ULTRA" -eq 1 ]; then
   DEPS_OK=1
-  say "recognition deps preinstalled"
+  say "recognition deps preinstalled (torch=$HAVE_TORCH)"
 else
-  say "deps missing, bounded pip attempt (240s)..."
-  if timeout 240 pip3 install --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-       "numpy<2" ultralytics > "$LOG/pip.log" 2>&1; then
-    python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1
+  say "ultralytics missing (torch=$HAVE_TORCH), bounded pip attempts..."
+  # 尝试 1：完整安装（420s）——torch 已在时这里只需几秒
+  for mirror in $PIP_MIRRORS; do
+    [ "$DEPS_OK" -eq 1 ] && break
+    say "pip attempt via $mirror (420s)..."
+    if timeout 420 pip3 install --index-url "$mirror" \
+         "numpy<2" ultralytics > "$LOG/pip1.log" 2>&1; then
+      python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1
+    fi
+  done
+  # 尝试 2：--no-deps 只装 ultralytics 本体（几 MB），依赖缺了运行时再兜
+  if [ "$DEPS_OK" -eq 0 ]; then
+    for mirror in $PIP_MIRRORS; do
+      say "pip --no-deps attempt via $mirror (120s)..."
+      if timeout 120 pip3 install --no-deps --index-url "$mirror" \
+           ultralytics >> "$LOG/pip2.log" 2>&1; then
+        python3 -c "import ultralytics" 2>/dev/null && DEPS_OK=1 && break
+      fi
+    done
   fi
   pip3 uninstall -y setuptools >/dev/null 2>&1 || true
 fi
@@ -138,16 +173,19 @@ say "shoot node starting (live)"
 sleep 3
 
 # ---------------------------------------------------------------------------
-# 6. 识别节点（仅依赖就绪时启动）
+# 6. 识别节点（依赖就绪用 yolo；装不上时用 template 模式——纯 OpenCV 兜底）
+#    [20261022] 不再"跳过识别"：识别活着 = 3 枪 30 分，识别死了 = 0 分。
 # ---------------------------------------------------------------------------
 if [ "$DEPS_OK" -eq 1 ]; then
   ros2 launch ican_recognize recognize.launch.py > "$LOG/recog.log" 2>&1 &
   RECO_PID=$!
-  say "recognize node starting"
+  say "recognize node starting (yolo)"
   sleep 5
 else
-  RECO_PID=""
-  say "skip recognize node (degraded)"
+  ros2 launch ican_recognize recognize.launch.py mode:=template > "$LOG/recog.log" 2>&1 &
+  RECO_PID=$!
+  say "recognize node starting (template fallback, no torch)"
+  sleep 5
 fi
 
 # ---------------------------------------------------------------------------

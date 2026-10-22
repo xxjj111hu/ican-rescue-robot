@@ -76,7 +76,7 @@ def _parse_class_conf(text):
 class RecognizeNode(Node):
     def __init__(self):
         super().__init__("ican_recognize_node")
-        self.declare_parameter("mode", "yolo")   # classifier | yolo
+        self.declare_parameter("mode", "yolo")   # classifier | yolo | template
         self.declare_parameter("image_topic", "/camera/image")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("detections_topic", "/referee/detections")
@@ -103,6 +103,9 @@ class RecognizeNode(Node):
             "model_path",
             os.environ.get("ICAN_YOLO_MODEL", os.path.join(DEFAULT_MODEL_DIR, "best.pt")),
         )
+        # template 模式的官方贴图模板目录（无 torch 时的兜底识别）
+        self.declare_parameter(
+            "template_dir", os.path.join(DEFAULT_MODEL_DIR, "templates"))
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("conf_thres", 0.20)
         # 多帧投票窗口：取最近 N 帧的众数，抑制单帧抖动
@@ -165,10 +168,25 @@ class RecognizeNode(Node):
             )
 
         self.class_names = {i: n for i, n in enumerate(CLASS_ORDER)}
-        if self.mode == "classifier":
-            self._init_classifier()
-        else:
-            self._init_yolo()
+        # [20261022] 初始化失败自动降级 template（纯 OpenCV 特征匹配，不依赖 torch）。
+        # 平台两轮实测 pip 装不上 ultralytics/torch → 识别节点崩 → 3 枪全打兜底
+        # 编号（裁判日志两块移动靶命中同一 region=7 铁证）。template 模式用官方
+        # 贴图源文件做 ORB 模板匹配，零第三方 pip 依赖，保证识别链路始终活着。
+        try:
+            if self.mode == "classifier":
+                self._init_classifier()
+            elif self.mode == "template":
+                self._init_template()
+            else:
+                self._init_yolo()
+        except Exception as exc:  # noqa: BLE001
+            if self.mode == "template":
+                raise
+            self.get_logger().warn(
+                f"{self.mode} 初始化失败（{type(exc).__name__}: {exc}），"
+                f"自动降级为 template 模式（纯 OpenCV，无需 torch）")
+            self.mode = "template"
+            self._init_template()
 
         image_topic = str(self.get_parameter("image_topic").value)
         odom_topic = str(self.get_parameter("odom_topic").value)
@@ -183,6 +201,13 @@ class RecognizeNode(Node):
         det_qos = QoSProfile(depth=10)
         det_qos.reliability = ReliabilityPolicy.RELIABLE
         det_qos.durability = DurabilityPolicy.VOLATILE
+        # 靶位消息用 TRANSIENT_LOCAL（latched）：识别只在进窗时发一条，
+        # 若射击节点晚于该消息才发现话题（DDS 发现时序抖动，平台 57 分那轮
+        # 疑似发生：话术到了但射击全打 default），latched 让晚到的订阅者
+        # 仍能拿到最后一条靶位消息。
+        target_qos = QoSProfile(depth=10)
+        target_qos.reliability = ReliabilityPolicy.RELIABLE
+        target_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         # 裁判话术统一由 ican_referee 模块发送（E-01）：
         # 话题名/QoS/格式校验都有单一事实来源
         self.referee = RefereeComm(
@@ -194,7 +219,7 @@ class RecognizeNode(Node):
         )
         self.result_pub = self.create_publisher(String, result_topic, 10)
         self.status_pub = self.create_publisher(String, status_topic, det_qos)
-        self.target_pub = self.create_publisher(String, target_topic, det_qos)
+        self.target_pub = self.create_publisher(String, target_topic, target_qos)
         self.debug_pub = (
             self.create_publisher(Image, debug_topic, 10) if self.publish_debug else None
         )
@@ -307,6 +332,118 @@ class RecognizeNode(Node):
         for i, n in enumerate(CLASS_ORDER):
             self.class_names.setdefault(i, n)
         self.get_logger().info(f"YOLO 模型加载完成: {path}")
+
+    # ---------- template 模式（纯 OpenCV 兜底，无需 torch） ----------
+    def _init_template(self):
+        """加载 5 类官方地面贴图做特征模板。
+
+        模板来源：平台 world 贴图原文件（materials/textures/point_targets/，
+        与 reference 图片集一致）。文件查找顺序：
+          1) 参数 template_dir（默认 ~/.ros/ican_recognize/templates）
+          2) 本包源码树 templates/（源码运行/平台 colcon build 后 symlink 场景）
+
+        [20261022 实测改进] 首版 ORB+好匹配数区分度不稳（点位3 good 数 9~12
+        徘徊在阈值边缘超时）。改为 SIFT + 单应性 RANSAC 内点数评分：
+        内点数对透视/光照变化远比原始好匹配数稳定，5 类纹理差异被大幅拉开。
+        """
+        import glob as _glob
+
+        cands = [
+            os.path.expanduser(str(self.get_parameter("template_dir").value)),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates"),
+        ]
+        tdir = next((c for c in cands if os.path.isdir(c)), None)
+        if tdir is None:
+            raise FileNotFoundError(
+                "template 模式找不到模板目录，试过: " + ", ".join(cands))
+
+        # SIFT 在 OpenCV 4.4+ 已进主模块（专利过期）；老版本退回 ORB
+        try:
+            self._tpl_sift = cv2.SIFT_create(nfeatures=2000)
+            norm = cv2.NORM_L2
+        except AttributeError:
+            self._tpl_sift = cv2.ORB_create(nfeatures=2500, scaleFactor=1.2, nlevels=8)
+            norm = cv2.NORM_HAMMING
+        self._tpl_bf = cv2.BFMatcher(norm)
+        self._tpl_db = []           # (class_name, kp, des)
+        files = sorted(
+            _glob.glob(os.path.join(tdir, "*.png"))
+            + _glob.glob(os.path.join(tdir, "*.jpg")))
+        for fp in files:
+            base = os.path.splitext(os.path.basename(fp))[0]   # e.g. collapsed_ruins_01
+            cls = base.rsplit("_", 1)[0]                        # collapsed_ruins
+            if cls not in CLASS_ORDER:
+                continue
+            img = cv2.imread(fp, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                continue
+            h, w = img.shape
+            scale = 640.0 / max(h, w)
+            if scale < 1.0:
+                img = cv2.resize(img, (int(w * scale), int(h * scale)),
+                                 interpolation=cv2.INTER_AREA)
+            kp, des = self._tpl_sift.detectAndCompute(img, None)
+            if des is None or len(kp) < 30:
+                self.get_logger().warn(f"[template] 模板特征不足，跳过: {fp}")
+                continue
+            self._tpl_db.append((cls, kp, des))
+        if not self._tpl_db:
+            raise RuntimeError(f"template 模式没有可用模板（目录 {tdir}）")
+        self._tpl_frame_t = 0.0
+        self._tpl_cache = (None, 0.0, None)
+        n_cls = len({c for c, _, _ in self._tpl_db})
+        self.get_logger().info(
+            f"template 模式就绪: {len(self._tpl_db)} 张模板 / {n_cls} 类，"
+            f"特征器={type(self._tpl_sift).__name__}，目录 {tdir}")
+
+    def _predict_template(self, image):
+        """SIFT 特征匹配 + 单应内点数评分。返回 (类别名, 置信度, None)。
+
+        分数 = findHomography(RANSAC) 的内点数；conf = min(0.99, inliers/40)。
+        单应成立还要求内点 >= 15 且内点率 >= 25%，过滤误匹配。
+        节流 0.4s（SIFT 全帧匹配较重，投票机制天然平滑）。
+        """
+        now = time.time()
+        if now - self._tpl_frame_t < 0.4 and self._tpl_cache[0] is not None:
+            return self._tpl_cache
+        self._tpl_frame_t = now
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        kp2, des2 = self._tpl_sift.detectAndCompute(gray, None)
+        if des2 is None or len(kp2) < 30:
+            self._tpl_cache = (None, 0.0, None)
+            return self._tpl_cache
+
+        best = (None, 0, 0)       # (class, inliers, good)
+        detail = []
+        for cls, kp1, des1 in self._tpl_db:
+            matches = self._tpl_bf.knnMatch(des1, des2, k=2)
+            good = [m for m, n in
+                    (mm for mm in matches if len(mm) == 2)
+                    if m.distance < 0.7 * n.distance]
+            detail.append(f"{cls}:{len(good)}")
+            if len(good) < 8:
+                continue
+            src = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+            dst = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+            H, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
+            if H is None or mask is None:
+                continue
+            inliers = int(mask.sum())
+            if inliers > best[1]:
+                best = (cls, inliers, len(good))
+
+        self.get_logger().info(
+            "[template] 匹配数 " + "  ".join(detail)
+            + f"  → 内点最高 {best[0]}:{best[1]}/{best[2]}",
+            throttle_duration_sec=2.0)
+        if best[0] is None or best[1] < 15 or best[1] < 0.25 * best[2]:
+            self._tpl_cache = (None, 0.0, None)
+        else:
+            conf = min(0.99, best[1] / 40.0)
+            self._tpl_cache = (best[0], conf, None)
+        return self._tpl_cache
 
     # ---------- 距离门控 ----------
     def on_odom(self, msg):
@@ -425,6 +562,9 @@ class RecognizeNode(Node):
     # ---------- 推理 ----------
     def _predict(self, image):
         """返回 (类别名, 置信度, 画框用 xyxy 或 None)"""
+        if self.mode == "template":
+            return self._predict_template(image)
+
         if self.mode == "classifier":
             x0, y0, x1, y1 = self.crop
             h, w = image.shape[:2]

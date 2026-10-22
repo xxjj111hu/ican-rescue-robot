@@ -254,9 +254,15 @@ class TargetShooterNode(Node):
         self.create_subscription(
             String, str(self.get_parameter("shot_topic").value), self.on_shot, 10,
             callback_group=self._io_group)
+        # 识别靶位：与识别节点发布端同为 RELIABLE+TRANSIENT_LOCAL。
+        # latched 保证即使本节点晚于消息才发现话题，也能收到最后一条
+        # （平台 57 分那轮疑似 DDS 发现时序抖动导致全程用 default 编号）。
+        tgt_qos = QoSProfile(depth=10)
+        tgt_qos.reliability = ReliabilityPolicy.RELIABLE
+        tgt_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(
             String, str(self.get_parameter("recognize_target_topic").value),
-            self.on_recog_target, 10, callback_group=self._io_group)
+            self.on_recog_target, tgt_qos, callback_group=self._io_group)
         # 任务节点在射击前发布 shoot_N，用于过滤非当前点位的靶位消息
         self.create_subscription(
             String, str(self.get_parameter("current_target_topic").value),
@@ -347,6 +353,25 @@ class TargetShooterNode(Node):
         if entry is not None and entry.get(kind) is not None:
             return int(entry[kind])
         return latest
+
+    def _wait_target_id(self, kind, wait_sec=2.0):
+        """取靶位号；没有时短暂等待识别消息（latched 重投/晚到），仍没有返回 None。
+
+        [20261022] 平台 57 分那轮射击全程用 default 编号，怀疑识别消息晚到。
+        开火前多等 2s 成本极低（瞄准本身就要十几秒），却能兜住时序抖动。
+        """
+        tid = self._target_for_current_point(kind)
+        if tid is not None:
+            return tid
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < wait_sec:
+            time.sleep(0.2)
+            tid = self._target_for_current_point(kind)
+            if tid is not None:
+                self.get_logger().info(
+                    f"[靶位] 等待 {time.monotonic() - t0:.1f}s 后收到 {kind} 靶位号 {tid}")
+                return tid
+        return None
 
     def on_recog_target(self, msg):
         try:
@@ -592,7 +617,7 @@ class TargetShooterNode(Node):
     def _fire_wheel(self, response):
         # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
         # 注意：_target_for_current_point 内部已加锁，这里不要再套一层
-        target_id = self._target_for_current_point("rotate") or int(
+        target_id = self._wait_target_id("rotate") or int(
             self.get_parameter("default_rotate_target").value)
         if not (1 <= target_id <= WHEEL_LEAF_COUNT):
             response.success = False
@@ -763,7 +788,7 @@ class TargetShooterNode(Node):
     def _fire_moving(self, response, name):
         # 优先取「当前点位」的存档靶位；没有存档再用最新值/兜底参数
         # 注意：_target_for_current_point 内部已加锁，这里不要再套一层
-        target_id = self._target_for_current_point("moving") or int(
+        target_id = self._wait_target_id("moving") or int(
             self.get_parameter("default_moving_target").value)
         if target_id not in self.code_order:
             response.success = False
