@@ -118,6 +118,9 @@ class SequentialMissionNode(Node):
         # 前爬 = 进点后沿当前车头方向低速直行指定距离（速度 nudge_speed，
         # 远低于 0.5 m/s 限速，不触发锁分）。
         self.declare_parameter("creep_forward_m_list", [0.10, 0.0, 0.0, 0.05])
+        # 前爬后微调对位：把车头压到任务点中心，位置分（重叠率×10）拿满
+        self.declare_parameter("fine_tol", 0.05)
+        self.declare_parameter("fine_timeout_sec", 8.0)
         self.declare_parameter("enable_shooting", False)
         self.declare_parameter("fire_service", "/shooter/shoot")
         # 分点狙击服务（D-05）：按任务点顺序调用对应的瞄准射击服务
@@ -181,6 +184,8 @@ class SequentialMissionNode(Node):
         self.creep_ms = (
             [float(v) for v in _creep] if _creep else [0.0, 0.0, 0.0, 0.0]
         )
+        self.fine_tol = float(self.get_parameter("fine_tol").value)
+        self.fine_timeout = float(self.get_parameter("fine_timeout_sec").value)
         self.enable_shooting = bool(self.get_parameter("enable_shooting").value)
         self.shoot_timeout = float(self.get_parameter("shoot_timeout_sec").value)
         self.max_shoot_attempts = max(
@@ -613,6 +618,10 @@ class SequentialMissionNode(Node):
             self.do_creep(now)
             return
 
+        if self.state == "FINE_ALIGN":
+            self.do_fine_align(now)
+            return
+
         if self.state == "SETTLING":
             self.stop_robot()
             if now - self.settle_start >= self.settle_sec:
@@ -776,17 +785,15 @@ class SequentialMissionNode(Node):
             self.publish_expected_point(-1)
             self.publish_referee_target(point)
             if self.enable_shooting:
-                # [20261022] 先按配置前爬（提高射击时车头与任务点重叠率→位置分），
-                # 再精确对准车头，最后调射击服务。
+                # [20261022] 流程：前爬（可选，朝任务点）→ 微调对位（必做，
+                # 把车头压到任务点中心拿满位置分）→ 对准车头 yaw → 射击。
                 creep = (self.creep_ms[point - 1]
                          if point - 1 < len(self.creep_ms) else 0.0)
                 if creep > 0.005:
                     self.enter_creep(point, creep)
                     return
-                # 先精确对准车头，再调射击服务。
-                # Nav2 停车的 yaw 偏差可能较大（实测能让 0.27 m 宽的环形靶整块跑出视野），
-                # 而射击节点只负责最后 ±3° 的微调，所以这里先把大头消掉。
-                self.enter_align_yaw(point)
+                # 无前爬时也直接做微调对位（微调对位是位置分拿满的关键，不依赖前爬）
+                self.enter_fine_align(point)
                 return
             self.wp_index += 1
             self.begin_next()
@@ -850,52 +857,117 @@ class SequentialMissionNode(Node):
         self.stop_robot()
         self.start_aim_shoot(self.align_point)
 
-    # ---------------- [20261022] 进点前爬（提升重叠率 → 位置分） ----------------
+    # ---------------- [20261022] 进点前爬（朝任务点 + 微调对位，提升位置分） ----------------
     def enter_creep(self, point, distance):
-        """进点后沿当前车头方向低速直行 distance 米。
+        """进点后**朝任务点坐标方向**低速直行 distance 米。
 
-        目的：裁判位置分 = 射击瞬间「车头与任务点重叠率」×10。
+        目的：裁判位置分 = 射击瞬间「车头与任务点重叠率」×10。旧实现沿
+        「当前车头方向」爬，若停车 yaw 有偏差就会越爬越偏；改为沿
+        「当前位置 → 任务点坐标」方向，无论车头朝哪都能压向任务点中心。
         速度用 nudge_speed（0.1 m/s），远低于 0.5 m/s 限速。
-        里程计闭环：按沿初始车头方向的投影位移判断是否走够。
         """
         odom = self.odom
-        if odom is None:
-            self.get_logger().warn("[前爬] 没有 odom，跳过前爬")
-            self.enter_align_yaw(point)
+        pos = self.amcl or odom
+        if pos is None:
+            self.get_logger().warn("[前爬] 没有定位，跳过前爬")
+            self.enter_fine_align(point)
             return
+        # 任务点坐标（current_target 前两项即 x,y）
+        tx = float(self.current_target[0]) if self.current_target else pos["x"]
+        ty = float(self.current_target[1]) if self.current_target else pos["y"]
+        # 前爬距离上限 = 配置值，但不冲过任务点：留 2cm 余量给微调对位
+        to_target = math.hypot(tx - pos["x"], ty - pos["y"])
+        creep_dist = min(float(distance), max(0.0, to_target - 0.02))
         self.creep_point = point
-        self.creep_dist = float(distance)
-        self.creep_x0 = odom["x"]
-        self.creep_y0 = odom["y"]
-        self.creep_yaw = odom["yaw"]
+        self.creep_dist = creep_dist
+        self.creep_tx = tx
+        self.creep_ty = ty
+        self.creep_x0 = pos["x"]
+        self.creep_y0 = pos["y"]
         self.creep_t0 = time.monotonic()
+        # 麦轮全向平移，无需转向，时间给足：平移 + 余量
         self.creep_timeout = min(
             self.nudge_max_sec,
-            distance / max(0.02, self.nudge_speed) + 2.0,
+            creep_dist / max(0.02, self.nudge_speed) + 4.0,
         )
         self.get_logger().info(
-            f"[前爬] 任务点 {point}：沿车头方向直行 {distance:.2f} m"
-            f"（速度 {self.nudge_speed:.2f} m/s，上限 {self.creep_timeout:.1f}s）")
+            f"[前爬] 任务点 {point}：朝任务点({tx:.3f},{ty:.3f})方向直行 "
+            f"{self.creep_dist:.2f} m（配置 {distance:.2f} m，当前到点 "
+            f"{to_target:.3f} m，速度 {self.nudge_speed:.2f} m/s，"
+            f"上限 {self.creep_timeout:.1f}s）")
         self.state = "CREEP"
 
     def do_creep(self, now):
-        odom = self.odom
-        if odom is None:
+        # 麦轮车全向移动：直接朝任务点方向平移，无需先转向。
+        pos = self.amcl or self.odom
+        if pos is None:
             self.stop_robot()
-            self.enter_align_yaw(self.creep_point)
+            self.enter_fine_align(self.creep_point)
             return
-        # 沿初始车头方向的投影位移（忽略转向，前爬期间不发角速度）
-        moved = ((odom["x"] - self.creep_x0) * math.cos(self.creep_yaw)
-                 + (odom["y"] - self.creep_y0) * math.sin(self.creep_yaw))
+        moved = math.hypot(pos["x"] - self.creep_x0, pos["y"] - self.creep_y0)
         if moved >= self.creep_dist or (now - self.creep_t0) > self.creep_timeout:
             self.stop_robot()
             self.get_logger().info(
                 f"[前爬] 任务点 {self.creep_point} 完成：位移 {moved:.3f} m"
                 f"（目标 {self.creep_dist:.2f} m，用时 {now - self.creep_t0:.1f}s）")
-            self.enter_align_yaw(self.creep_point)
+            self.enter_fine_align(self.creep_point)
             return
+        # 世界系误差 → 车身系（麦轮可直接 x/y 平移，与 do_nudge 同款）
+        ex = self.creep_tx - pos["x"]
+        ey = self.creep_ty - pos["y"]
+        yaw = pos["yaw"]
+        rx = ex * math.cos(yaw) + ey * math.sin(yaw)
+        ry = -ex * math.sin(yaw) + ey * math.cos(yaw)
         tw = Twist()
-        tw.linear.x = self.nudge_speed
+        tw.linear.x = clamp(rx * 0.8, -self.nudge_speed, self.nudge_speed)
+        tw.linear.y = clamp(ry * 0.8, -self.nudge_speed, self.nudge_speed)
+        self.cmd_pub.publish(tw)
+
+    # ---------------- 停车微调对位（朝任务点中心逼近 → 位置分拿满） ----------------
+    def enter_fine_align(self, point):
+        """前爬结束后进入微调对位：用 AMCL（优先）坐标逼近任务点中心。
+
+        位置分 = 射击瞬间车头与任务点重叠率×10，重叠率 100% 才拿满。
+        Nav2 到点容差 0.10m + AMCL 漂移会让车停在偏离中心最多 0.15m 处，
+        这里用极低速微调，把残差压到 fine_tol（默认 0.05m）以内。
+        """
+        pos = self.amcl or self.odom
+        tx = float(self.current_target[0]) if self.current_target else 0.0
+        ty = float(self.current_target[1]) if self.current_target else 0.0
+        self.fine_point = point
+        self.fine_tx = tx
+        self.fine_ty = ty
+        self.fine_t0 = time.monotonic()
+        self.get_logger().info(
+            f"[微调] 任务点 {point}：朝中心({tx:.3f},{ty:.3f})微调，"
+            f"容差 {self.fine_tol:.3f} m，上限 {self.fine_timeout:.1f}s")
+        self.state = "FINE_ALIGN"
+
+    def do_fine_align(self, now):
+        pos = self.amcl or self.odom
+        if pos is None:
+            self.get_logger().warn("[微调] 没有定位（amcl/odom 皆无），跳过微调")
+            self.stop_robot()
+            self.enter_align_yaw(self.fine_point)
+            return
+        dx = self.fine_tx - pos["x"]
+        dy = self.fine_ty - pos["y"]
+        dist = math.hypot(dx, dy)
+        if dist <= self.fine_tol or (now - self.fine_t0) > self.fine_timeout:
+            self.stop_robot()
+            self.get_logger().info(
+                f"[微调] 任务点 {self.fine_point} 结束：残差 {dist:.3f} m"
+                f"（容差 {self.fine_tol:.3f} m，用时 {now - self.fine_t0:.1f}s）")
+            self.enter_align_yaw(self.fine_point)
+            return
+        # 麦轮全向平移逼近（与 do_nudge 同款），无需转向
+        yaw = pos["yaw"]
+        rx = dx * math.cos(yaw) + dy * math.sin(yaw)
+        ry = -dx * math.sin(yaw) + dy * math.cos(yaw)
+        speed = min(self.nudge_speed, 0.06 + 0.4 * dist)
+        tw = Twist()
+        tw.linear.x = clamp(rx * 0.8, -speed, speed)
+        tw.linear.y = clamp(ry * 0.8, -speed, speed)
         self.cmd_pub.publish(tw)
 
     # 可重试的失败类型（官方 §1.3(3)：未命中允许多次射击）
