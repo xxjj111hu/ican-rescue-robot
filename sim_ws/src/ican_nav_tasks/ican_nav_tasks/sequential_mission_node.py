@@ -112,6 +112,12 @@ class SequentialMissionNode(Node):
         self.declare_parameter("settle_sec", 2.0)
         self.declare_parameter("nudge_speed", 0.1)
         self.declare_parameter("nudge_max_sec", 12.0)
+        # [20261022 平台实测] 位置分 = 射击瞬间「车头与任务点重叠率」×10，
+        # 首跑重叠率 70.2/77.0/99.8/88.3 → 位置分 7/8/10/9（丢 6 分）。
+        # 重叠机理未完全确定，用对照实验定方向：task_1/4 前爬，task_2/3 作对照。
+        # 前爬 = 进点后沿当前车头方向低速直行指定距离（速度 nudge_speed，
+        # 远低于 0.5 m/s 限速，不触发锁分）。
+        self.declare_parameter("creep_forward_m_list", [0.10, 0.0, 0.0, 0.05])
         self.declare_parameter("enable_shooting", False)
         self.declare_parameter("fire_service", "/shooter/shoot")
         # 分点狙击服务（D-05）：按任务点顺序调用对应的瞄准射击服务
@@ -171,6 +177,10 @@ class SequentialMissionNode(Node):
         self.settle_sec = float(self.get_parameter("settle_sec").value)
         self.nudge_speed = float(self.get_parameter("nudge_speed").value)
         self.nudge_max_sec = float(self.get_parameter("nudge_max_sec").value)
+        _creep = self.get_parameter("creep_forward_m_list").value
+        self.creep_ms = (
+            [float(v) for v in _creep] if _creep else [0.0, 0.0, 0.0, 0.0]
+        )
         self.enable_shooting = bool(self.get_parameter("enable_shooting").value)
         self.shoot_timeout = float(self.get_parameter("shoot_timeout_sec").value)
         self.max_shoot_attempts = max(
@@ -599,6 +609,10 @@ class SequentialMissionNode(Node):
             self.do_nudge(now, self.park_tol, self.enter_settling)
             return
 
+        if self.state == "CREEP":
+            self.do_creep(now)
+            return
+
         if self.state == "SETTLING":
             self.stop_robot()
             if now - self.settle_start >= self.settle_sec:
@@ -762,6 +776,13 @@ class SequentialMissionNode(Node):
             self.publish_expected_point(-1)
             self.publish_referee_target(point)
             if self.enable_shooting:
+                # [20261022] 先按配置前爬（提高射击时车头与任务点重叠率→位置分），
+                # 再精确对准车头，最后调射击服务。
+                creep = (self.creep_ms[point - 1]
+                         if point - 1 < len(self.creep_ms) else 0.0)
+                if creep > 0.005:
+                    self.enter_creep(point, creep)
+                    return
                 # 先精确对准车头，再调射击服务。
                 # Nav2 停车的 yaw 偏差可能较大（实测能让 0.27 m 宽的环形靶整块跑出视野），
                 # 而射击节点只负责最后 ±3° 的微调，所以这里先把大头消掉。
@@ -828,6 +849,54 @@ class SequentialMissionNode(Node):
             self.get_logger().warn("[对准] 没有 odom，跳过对准")
         self.stop_robot()
         self.start_aim_shoot(self.align_point)
+
+    # ---------------- [20261022] 进点前爬（提升重叠率 → 位置分） ----------------
+    def enter_creep(self, point, distance):
+        """进点后沿当前车头方向低速直行 distance 米。
+
+        目的：裁判位置分 = 射击瞬间「车头与任务点重叠率」×10。
+        速度用 nudge_speed（0.1 m/s），远低于 0.5 m/s 限速。
+        里程计闭环：按沿初始车头方向的投影位移判断是否走够。
+        """
+        odom = self.odom
+        if odom is None:
+            self.get_logger().warn("[前爬] 没有 odom，跳过前爬")
+            self.enter_align_yaw(point)
+            return
+        self.creep_point = point
+        self.creep_dist = float(distance)
+        self.creep_x0 = odom["x"]
+        self.creep_y0 = odom["y"]
+        self.creep_yaw = odom["yaw"]
+        self.creep_t0 = time.monotonic()
+        self.creep_timeout = min(
+            self.nudge_max_sec,
+            distance / max(0.02, self.nudge_speed) + 2.0,
+        )
+        self.get_logger().info(
+            f"[前爬] 任务点 {point}：沿车头方向直行 {distance:.2f} m"
+            f"（速度 {self.nudge_speed:.2f} m/s，上限 {self.creep_timeout:.1f}s）")
+        self.state = "CREEP"
+
+    def do_creep(self, now):
+        odom = self.odom
+        if odom is None:
+            self.stop_robot()
+            self.enter_align_yaw(self.creep_point)
+            return
+        # 沿初始车头方向的投影位移（忽略转向，前爬期间不发角速度）
+        moved = ((odom["x"] - self.creep_x0) * math.cos(self.creep_yaw)
+                 + (odom["y"] - self.creep_y0) * math.sin(self.creep_yaw))
+        if moved >= self.creep_dist or (now - self.creep_t0) > self.creep_timeout:
+            self.stop_robot()
+            self.get_logger().info(
+                f"[前爬] 任务点 {self.creep_point} 完成：位移 {moved:.3f} m"
+                f"（目标 {self.creep_dist:.2f} m，用时 {now - self.creep_t0:.1f}s）")
+            self.enter_align_yaw(self.creep_point)
+            return
+        tw = Twist()
+        tw.linear.x = self.nudge_speed
+        self.cmd_pub.publish(tw)
 
     # 可重试的失败类型（官方 §1.3(3)：未命中允许多次射击）
     RETRYABLE_VERDICTS = ("FAIL", "TIMEOUT", "CALL_ERR")

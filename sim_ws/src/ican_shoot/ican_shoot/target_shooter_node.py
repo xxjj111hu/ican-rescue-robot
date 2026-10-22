@@ -29,7 +29,8 @@ x 4 种放大倍数都解不出（唯一 DICT_4X4_1000 id=988 是误检）。
 移动靶（target_moving_3/4）
 ---------------------------
 单个板 0.02x0.18x0.07，贴图 MovingBoardTexture（3 个码画在贴图上，非独立几何），
-所以编号顺序无法从 world 文件读 —— 用参数 moving_code_order 配置（默认左→右 = 6,7,8）。
+所以编号顺序无法从 world 文件读 —— 用参数 moving_code_order 配置。
+[20261022 平台实测修正] 两枪独立证据推出贴图从左到右实际是 7,8,6，默认 "786"。
 板沿 x 往复 ±0.15 m；其世界 x 可实时读，据此算每个码的世界 x，再转车头对准。
 
 计时
@@ -134,8 +135,6 @@ class TargetShooterNode(Node):
         self.declare_parameter("default_rotate_target", 3)
         self.declare_parameter("default_moving_target", 7)
 
-        # 移动靶 3 个码的顺序（左→右），用于把 id 映射到板的偏移
-        self.declare_parameter("moving_code_order", "678")
         # 任务节点在调用射击服务前发布 shoot_N，用于过滤「非当前点位」的靶位消息
         self.declare_parameter("current_target_topic", "/referee/current_target")
 
@@ -165,6 +164,26 @@ class TargetShooterNode(Node):
 
         # 移动靶对准容差（板上的码宽 0.06 m -> 用像素无关的米制容差）
         self.declare_parameter("moving_pos_tol_m", 0.012)
+        # [20261022 平台实测修正] 裁判日志 shot_start→shot_hit 仅隔 13~23ms，
+        # 命中判定是即时的（射线式），无子弹飞行时间 → 打偏一个码位不是提前量，
+        # 而是 moving_code_order 假设错误：两枪独立证据（瞄中码→中 id8；瞄左码→
+        # 中 id7）推出贴图从左到右实际是 7,8,6。默认改为 "786"。
+        self.declare_parameter("moving_code_order", "786")
+        # [20261022] 旋转靶：几何上（命中判定即时）只可能命中瞄准的那个叶片，
+        # 但平台实测"瞄 2 中 1" → 裁判的叶片 id 比贴图数字小 1（按叶片索引编号）。
+        # 修正：瞄 leaf_{id}（索引 = id），本参数为索引偏移（默认 1）。
+        self.declare_parameter("wheel_leaf_offset", 1)
+        # 子弹飞行时间（s）：实测命中即时（<25ms），保持 0 = 不做提前量修正。
+        # 若未来官方改为真实弹道，再调大此值启用提前量瞄准。
+        self.declare_parameter("moving_bullet_flight_sec", 0.0)
+        # 板运动基准 x 与半程（来自 land_shoot.world / target_motion_node.py）
+        self.declare_parameter("moving_base_x", 1.125)
+        self.declare_parameter("moving_half_range", 0.15)
+        # 距折返的安全余量（s）：开火时必须满足 t_rev > t_flight + 该余量
+        self.declare_parameter("moving_reversal_margin_sec", 0.4)
+        # 可选提前量：按板速度 × 该时间沿运动方向修正瞄准点（折返开火时不需要，
+        # 默认 0；若实测折返等待太久可改用提前量方案）
+        self.declare_parameter("moving_lead_sec", 0.0)
 
         self.declare_parameter("fire_probe_sec", 2.0)
         self.declare_parameter("dry_run", False)
@@ -181,9 +200,19 @@ class TargetShooterNode(Node):
         self.wheel_window = math.radians(
             float(self.get_parameter("wheel_window_deg").value))
         self.wheel_lat_tol = float(self.get_parameter("wheel_lat_tol_m").value)
+        self.leaf_offset = int(self.get_parameter("wheel_leaf_offset").value)
         self.odom_wait = float(self.get_parameter("odom_wait_sec").value)
         self.robot_model = str(self.get_parameter("robot_model_name").value)
         self.moving_pos_tol = float(self.get_parameter("moving_pos_tol_m").value)
+        self.moving_flight = float(
+            self.get_parameter("moving_bullet_flight_sec").value)
+        self.moving_base_x = float(self.get_parameter("moving_base_x").value)
+        self.moving_half_range = float(
+            self.get_parameter("moving_half_range").value)
+        self.moving_rev_margin = float(
+            self.get_parameter("moving_reversal_margin_sec").value)
+        self.moving_lead_sec = float(
+            self.get_parameter("moving_lead_sec").value)
         self.fire_probe = float(self.get_parameter("fire_probe_sec").value)
         self.dry_run = bool(self.get_parameter("dry_run").value)
 
@@ -569,7 +598,9 @@ class TargetShooterNode(Node):
             response.success = False
             response.message = f"旋转靶编号非法: {target_id}"
             return response
-        k = target_id - 1                       # leaf 索引
+        # leaf 索引：裁判按叶片索引编号（leaf_{id} 对应 id），与贴图数字差 wheel_leaf_offset
+        # （平台实测「瞄 2 中 1」→ offset=1，即瞄 leaf_{target_id}）
+        k = target_id - 1 + self.leaf_offset
         phi = math.radians(WHEEL_PHI0_DEG - 72.0 * k)
         # 叶片在轮子本地坐标系的 (y, z)
         leaf_ly = WHEEL_LEAF_RADIUS * math.cos(phi)
@@ -760,6 +791,10 @@ class TargetShooterNode(Node):
         need_settle = max(1, int(round(self.settle_sec / self.poll_dt)))
         last = None
         best_lat = None
+        # [20261022] 板速度估计（沿 x 往复）——用于折返点检测与可选提前量
+        prev_bx = None
+        prev_bt = None
+        board_vx = 0.0
 
         while time.monotonic() - t_start < self.aim_timeout:
             st = self._get_entity(name, timeout=1.0)
@@ -769,6 +804,18 @@ class TargetShooterNode(Node):
                 continue
             bx = st.pose.position.x
             by = st.pose.position.y
+            # 板速 EMA：三角波速度恒定(0.03 m/s)，EMA 收敛后符号即运动方向
+            now_m = time.monotonic()
+            if prev_bx is not None and now_m > prev_bt:
+                inst = (bx - prev_bx) / (now_m - prev_bt)
+                board_vx = 0.7 * board_vx + 0.3 * inst
+            prev_bx, prev_bt = bx, now_m
+            # 距下次折返的时间：三角波在运动方向端点折返
+            travel = bx - self.moving_base_x
+            d_end = (self.moving_half_range - travel) if board_vx > 0 \
+                else (travel + self.moving_half_range)
+            spd = max(abs(board_vx), 1e-3)
+            t_rev = max(0.0, d_end) / spd
             q = st.pose.orientation
             # 板的 yaw：板宽沿本地 y（0.18），绕 z 转 yaw 后映射到世界
             board_yaw = yaw_from_quat(q.z, q.w)
@@ -777,22 +824,32 @@ class TargetShooterNode(Node):
             off_y = math.cos(board_yaw) * code_dx
             code_x = bx + off_x
             code_y = by + off_y
+            # 解析提前量：码在子弹命中瞬间会移动 vx * t_flight；
+            # moving_lead_sec 默认 0，等价于直接用飞行时间
+            lead_sec = (self.moving_flight if self.moving_lead_sec <= 0.0
+                        else self.moving_lead_sec)
+            code_x += board_vx * lead_sec
 
             dist = math.hypot(code_x - odom["x"], code_y - odom["y"])
             desired_yaw = math.atan2(code_y - odom["y"], code_x - odom["x"])
             yaw_err = (desired_yaw - odom["yaw"] + math.pi) % (2 * math.pi) - math.pi
             lateral_err = dist * math.sin(yaw_err)   # 车头方向的垂距（米）
+            # 开火窗口：对准「未来码位」且整段弹道时间内板不折返
+            can_fire = t_rev > self.moving_flight + self.moving_rev_margin
             last = (f"板=({bx:.3f},{by:.3f}) 码=({code_x:.3f},{code_y:.3f}) "
                     f"距离={dist:.3f}m 横向={lateral_err*1000:+.0f}mm "
-                    f"朝向误差={math.degrees(yaw_err):+.1f}°")
+                    f"朝向误差={math.degrees(yaw_err):+.1f}° "
+                    f"板速={board_vx*1000:+.0f}mm/s 距折返={t_rev:.1f}s")
             if best_lat is None or abs(lateral_err) < best_lat:
                 best_lat = abs(lateral_err)
 
-            if abs(lateral_err) <= self.moving_pos_tol and abs(yaw_err) <= self.yaw_tol:
+            if (abs(lateral_err) <= self.moving_pos_tol
+                    and abs(yaw_err) <= self.yaw_tol and can_fire):
                 settle += 1
                 self._stop()
                 if settle >= need_settle:
-                    self.get_logger().info(f"窗口命中：{name} {target_id} 号 → 开火（{last}）")
+                    self.get_logger().info(
+                        f"窗口命中：{name} {target_id} 号 → 开火（{last}）")
                     ok, note = self._fire_and_report()
                     response.success = ok
                     response.message = f"{name} 的 {target_id} 号已射击（{last}）；{note}"
